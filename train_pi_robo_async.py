@@ -23,7 +23,7 @@ from expo_ft.agents.alg.batch_utils import CRITIC_CAMERA_KEYS
 from expo_ft.data.replay_buffer import create_replay_buffer, _critic_key_to_storage
 from expo_ft.data.batch_processor import BatchProcessor
 from expo_ft.env.env_client import EnvClientWrapper
-from expo_ft.env.droid_utils import process_droid_dataset
+from expo_ft.env.task_dataset import load_task_dataset
 from expo_ft.utils.log_utils import EpisodeState, TrainingStats
 from expo_ft.utils.loop_utils import AsyncChunkSampler, EpisodeSink
 from expo_ft.utils.timer import Timer
@@ -140,14 +140,7 @@ def main(_):
     init_wandb(checkpoint_dir_path, resuming, FLAGS.project_name, FLAGS.run_name)
     wandb.config.update(FLAGS.flag_values_dict(), allow_val_change=resuming)
 
-    if FLAGS.config_task.env_type == "droid":
-        dataset = process_droid_dataset(
-            FLAGS.dataset_path,
-            FLAGS.config_task,
-            num_data=FLAGS.num_data,
-        )
-    else:
-        raise ValueError(f"Unsupported dataset type: {FLAGS.config_task.env_type}")
+    dataset = load_task_dataset(FLAGS.dataset_path, FLAGS.config_task, FLAGS.num_data)
     if not dataset:
         raise ValueError(f"No demos loaded from {FLAGS.dataset_path}.")
     example_action = dataset[0]['actions'][np.newaxis]

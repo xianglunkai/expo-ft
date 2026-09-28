@@ -1,0 +1,806 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Real-Time EXPO-FT × Cobot Magic 单臂螺丝分拣 · 逐步实施手册（v4）</title>
+<style>
+  :root {
+    --bg:#0d1117; --card:#161b22; --card2:#1c2330; --line:#30363d;
+    --txt:#e6edf3; --dim:#8b9cb3; --teal:#3dd6c6; --amber:#e3a452;
+    --rose:#f85149; --ok:#3fb950; --code:#010409;
+    --sans:"IBM Plex Sans","Noto Sans SC",system-ui,sans-serif;
+    --mono:"JetBrains Mono","SF Mono",ui-monospace,monospace;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;font-family:var(--sans);color:var(--txt);background:var(--bg);line-height:1.55}
+  .wrap{max-width:1000px;margin:0 auto;padding:22px 16px 100px}
+  header{background:linear-gradient(160deg,#18232e,#10161d);border:1px solid var(--line);border-radius:16px;padding:24px 22px 16px;margin-bottom:14px}
+  header h1{margin:0 0 8px;font-size:clamp(1.25rem,2.3vw,1.75rem)}
+  header p{margin:0;color:var(--dim);max-width:82ch}
+  .chips{display:flex;flex-wrap:wrap;gap:7px;margin-top:12px}
+  .chip{font-size:12px;padding:3px 9px;border-radius:999px;border:1px solid var(--line);background:var(--card2);color:var(--dim)}
+  .chip.ok{color:var(--ok);border-color:#244a32}
+  .chip.warn{color:var(--amber);border-color:#5a4030}
+  .chip.no{color:var(--rose);border-color:#5a2a2a}
+  .rail{position:sticky;top:0;z-index:8;background:rgba(13,17,23,.94);backdrop-filter:blur(8px);border-bottom:1px solid var(--line);margin:0 -16px 14px;padding:8px 16px}
+  .rail-in{max-width:1000px;margin:0 auto;display:flex;gap:5px;overflow-x:auto}
+  .rail a{flex:0 0 auto;text-decoration:none;color:var(--dim);font-size:12px;padding:5px 9px;border-radius:8px}
+  .rail a:hover,.rail a.on{color:var(--teal);background:#142422}
+  section{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:18px 20px 20px;margin-bottom:12px}
+  h2{margin:0 0 4px;font-size:1.1rem;display:flex;gap:10px;align-items:center}
+  .n{width:28px;height:28px;border-radius:8px;display:inline-flex;align-items:center;justify-content:center;background:#143834;color:var(--teal);font-size:13px;font-weight:700}
+  .n.done{background:#1c3d28;color:var(--ok)}
+  .io{margin:0 0 12px 38px;font-size:12.5px;color:var(--dim)}
+  h3{margin:16px 0 8px;font-size:.95rem;color:#d5e2f0}
+  p,li{color:#d0dbe8}
+  table{width:100%;border-collapse:collapse;font-size:13.3px;margin:8px 0}
+  th,td{border:1px solid var(--line);padding:7px 9px;text-align:left;vertical-align:top}
+  th{background:var(--card2);color:#c8d6e6}
+  code{font-family:var(--mono);font-size:.85em;background:var(--code);color:#b7efe6;padding:1px 5px;border-radius:4px}
+  pre{position:relative;background:var(--code);border:1px solid var(--line);border-radius:10px;padding:12px 14px;overflow-x:auto;font-family:var(--mono);font-size:12.1px;line-height:1.45;color:#d7e5f3}
+  pre .c{color:#6f8296} pre .g{color:#3fb950} pre .file{color:var(--amber)}
+  button.copy{position:absolute;top:8px;right:8px;border:1px solid var(--line);background:var(--card2);color:var(--dim);border-radius:6px;padding:3px 8px;font-size:11px;cursor:pointer;font-family:var(--sans)}
+  button.copy:hover{color:var(--teal)}
+  .note{margin:10px 0;padding:10px 12px;border-radius:0 10px 10px 0;border-left:3px solid var(--teal);background:#122018;font-size:14px}
+  .note.warn{border-left-color:var(--amber);background:#241c14}
+  .note.bad{border-left-color:var(--rose);background:#261418}
+  .who{display:inline-block;font-size:11px;font-weight:700;padding:1px 7px;border-radius:6px;margin-right:5px}
+  .who.gpu{background:#1a3340;color:#7fd4ff}
+  .who.ipc{background:#3a2a1a;color:#f0b87a}
+  .who.gate{background:#2a2038;color:#d2b4ff}
+  .checks label{display:flex;gap:10px;padding:7px 10px;margin-bottom:5px;border:1px solid var(--line);border-radius:8px;background:#12171e;cursor:pointer;font-size:13.5px}
+  .checks label.done{opacity:.5;text-decoration:line-through}
+  .bar{height:8px;background:#0d131a;border-radius:99px;overflow:hidden;margin:8px 0 12px}
+  .bar>i{display:block;height:100%;width:0;background:linear-gradient(90deg,var(--teal),var(--ok))}
+  .kv{display:grid;grid-template-columns:130px 1fr;gap:4px 10px;font-size:13.5px;margin:8px 0 12px}
+  .kv b{color:var(--amber);font-weight:600}
+  footer{text-align:center;color:var(--dim);font-size:12px;margin-top:16px}
+  .delta{background:#1a2430;border:1px dashed #3a4d62;border-radius:10px;padding:10px 12px;margin:10px 0;font-size:13.5px}
+  .delta b{color:var(--amber)}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>Real-Time EXPO-FT → Cobot Magic 单臂<br/>螺丝分拣 · 逐步实施手册 <span style="color:var(--amber)">v4</span></h1>
+  <p>
+    RTC-SFT 在 <b>H20</b> 上按作者流程跑（<code>train_offline_rtc.py</code>，从 <code>pi05_base</code> 起，编码器不冻）。
+    在线 RL 和评测在<b>本机 3090</b>。H20 训完后把权重和 <code>norm_stats</code> 下载到
+    <code>checkpoints/from_h20/</code>。数据是 LeRobot，不是 hdf5。
+    机器人仍是右臂 7 维、<code>cam_high</code> + <code>cam_right_wrist</code>、<code>adapt_to_pi=False</code>。
+  </p>
+  <div class="chips">
+    <span class="chip ok">H20：RTC-SFT · pi05_base · bs 64</span>
+    <span class="chip ok">本机：online RL · 读 from_h20</span>
+    <span class="chip ok">LeRobot · 7D 右臂</span>
+    <span class="chip warn">OpenPI train.py 不是 RTC</span>
+    <span class="chip no">不要从 29999 热启动 RTC · 不要 async</span>
+  </div>
+</header>
+
+<div class="rail"><div class="rail-in" id="rail">
+  <a href="#sdelta">Δ 修订</a>
+  <a href="#s0">0 契约</a>
+  <a href="#s1">1 GPU ✓</a>
+  <a href="#s2">2 注入 ✓</a>
+  <a href="#s3">3 IPC ✓</a>
+  <a href="#s4">4 代码落地</a>
+  <a href="#s5">5 数据验收</a>
+  <a href="#s6">6 Norm</a>
+  <a href="#s7">7 H20 RTC</a>
+  <a href="#s7b">7b 下载</a>
+  <a href="#s8">8 本机 online</a>
+  <a href="#salg">算法</a>
+  <a href="#s9">9 评测</a>
+  <a href="#sloop">闭环对照</a>
+</div></div>
+
+<!-- DELTA -->
+<section id="sdelta">
+  <h2><span class="n">Δ</span>这次相对上一版改了什么</h2>
+  <p>算法、7D 右臂、两相机、端口 8103 没变。变的是训练放在哪、权重从哪来。</p>
+  <table>
+    <tr><th>项</th><th>现在</th></tr>
+    <tr><td>RTC-SFT</td><td>H20 上 <code>offline_train.sh</code> → <code>train_offline_rtc.py</code>。从 <code>pi05_base</code> 起，编码器不冻，bs=64。不用 OpenPI <code>scripts/train.py</code>，不用 29999。</td></tr>
+    <tr><td>在线 RL / 评测</td><td>本机 3090。<code>run_server.sh</code> / <code>eval_policy.sh</code> 读 <code>checkpoints/from_h20/</code>，bs=8，N=8，只同步。</td></tr>
+    <tr><td>数据</td><td>LeRobot。<code>cobot_utils.py</code> 读进和作者 hdf5 loader 同一套逐步字典。</td></tr>
+    <tr><td>Step 4 代码</td><td>已在仓库：<code>client/envs/cobot_env.py</code>、<code>configs/task/cobot_screw_sorting.py</code>、<code>expo_ft/env/cobot_utils.py</code>、<code>scripts/cobot_screw_sorting/</code>。</td></tr>
+    <tr><td>H20 开训</td><td>步数只看 <code>--max_steps=4000</code>，不看 TrainConfig 的 <code>num_train_steps=30000</code>。图像从 parquet 读。RTC 不建第二份 target 权重。空 checkpoint 目录用脚本里的 <code>--resume</code> 接着走。</td></tr>
+  </table>
+</section>
+
+<!-- 0 -->
+<section id="s0">
+  <h2><span class="n">0</span>钉死接口契约（后面每一步都对这张表）</h2>
+  <p class="io">输入：OpenPI 已有 SFT 配方 + Cobot 单臂数据。输出：整条 RT-EXPO-FT 真机闭环的「唯一合法接口」。</p>
+
+  <table>
+    <tr><th>项</th><th>值（必须一致）</th></tr>
+    <tr><td>算法</td><td>Real-Time EXPO-FT：offline <code>RTCLearner</code> → online <code>RealTimeEXPOFTLearner</code></td></tr>
+    <tr><td>OpenPI fork</td><td><code>expo_ft/agents/vla/openpi</code> @ <code>real-time-expo-ft</code> / <code>2abe462</code>（不是 <code>/home/xlk/work/openpi</code>，不是 <code>expo_ft</code> 分支）</td></tr>
+    <tr><td>TrainConfig.name</td><td><code>pi05_cobot_screw_sorting</code>（fork 里已加；权重默认 <code>pi05_base</code>）</td></tr>
+    <tr><td>DataConfig</td><td><code>LeRobotCobotSingleArmDataConfig</code> · <code>adapt_to_pi=False</code> · delta mask <code>(6,-1)</code></td></tr>
+    <tr><td>模型几何</td><td><code>Pi0Config(pi05=True)</code>：默认 <code>action_dim=32</code>、<b><code>action_horizon=50</code></b>。和作者的 LoRA / horizon 16 不是同一套权重，<b>不要改成 16</b>。<code>p1_max_delay=10 &lt; 50</code> 合法。</td></tr>
+    <tr><td>动作 / 状态</td><td><b>7D</b>：右臂 6 关节 + 夹爪，绝对位置（env 发绝对角；模型内部变 delta）</td></tr>
+    <tr><td>相机</td><td><code>cam_high</code> + <code>cam_right_wrist</code>（左腕不传 → mask=False 黑图）</td></tr>
+    <tr><td>critic 相机</td><td><code>("base_0_rgb", "right_wrist_0_rgb")</code> —— 默认是 left_wrist，必须改</td></tr>
+    <tr><td>prompt</td><td><code>Please sort and return the silver screws in the grey box to their proper places.</code>（句号与 <code>tasks.jsonl</code> 一致。loader 用样本里的 <code>task</code>；TrainConfig 的 default_prompt 只在没有 task 时兜底）</td></tr>
+    <tr><td>真机臂</td><td><code>use_single_arm=True</code>，<code>SINGLE_ARM_NAME="right"</code>（openpi <code>real_env.py</code> 已是 right）</td></tr>
+    <tr><td>控制频率</td><td><code>control_hz=30</code>，一步约 33 ms。任务配置和 <code>CobotMagicEnv</code> 都用这个值。</td></tr>
+    <tr><td>delay / replan</td><td>单位是控制步，不是毫秒。<code>--replan_steps=8</code>（约 267 ms 换一段）；<code>--delay=5</code>（还剩约 167 ms 时开始下一次推理，这 5 步是 prefix）。<code>p1_max_delay=10</code>，部署 delay 不能大于 replan。</td></tr>
+    <tr><td><code>edit_action_xyzg</code></td><td><b>False</b>（True 会按 7D cartesian 把 dim 3:6 当旋转清零，这里 3:6 是腕关节）</td></tr>
+    <tr><td>RTC 初始权重</td><td>H20：<code>/workspace/openpi/models/checkpoints_pi05/pi05_base/params</code>。不从 29999 热启动。</td></tr>
+    <tr><td>norm_stats</td><td>H20 上 <code>compute_norm_stats.py --config-name pi05_cobot_screw_sorting</code>，写到 <code>/workspace/openpi/assets/pi05_cobot_screw_sorting/screw_sorting/</code>。和权重一起下载。</td></tr>
+    <tr><td>本机落点</td><td><code>checkpoints/from_h20/rtc_screw_maxdelay10/checkpoints/4000/params</code> 与 <code>checkpoints/from_h20/assets/pi05_cobot_screw_sorting/</code></td></tr>
+    <tr><td>本机演示</td><td><code>/data/huggingface/lerobot/openpi/screw_sorting_single_sft</code>（含 <code>meta/info.json</code>）。目录不同就设 <code>LEROBOT_ROOT</code>。</td></tr>
+    <tr><td>端口</td><td>本机 learner 听 <code>0.0.0.0:8103</code>，client 拨 <code>&lt;本机IP&gt;:8103</code></td></tr>
+    <tr><td>机器分工</td><td>H20：只跑 <code>offline_train.sh</code>（4 卡，编码器不冻，bs=64）。本机 3090：只跑 <code>run_server.sh</code> / <code>eval_policy.sh</code>（bs=8，N=8）。禁止 async。</td></tr>
+  </table>
+
+  <h3>Env → learner 的 observation（键名必须含 image）</h3>
+<pre><button class="copy" onclick="cp(this)">复制</button><code>{
+  "observation.images.cam_high":        uint8 HWC,     <span class="c"># 前视</span>
+  "observation.images.cam_right_wrist": uint8 HWC,     <span class="c"># 右腕</span>
+  "observation.state":                  float32 (7,),  <span class="c"># 右臂 qpos</span>
+  "prompt":                             str
+}
+<span class="c"># 不要传 cam_left_wrist。CobotSingleArmInputs 会给 left_wrist_0_rgb 填黑图 + mask=False。</span></code></pre>
+
+  <div class="note warn">
+    作者的 RTC-SFT 就是任务微调本身：<code>train_offline_rtc.py</code> 从 <code>pi05_base</code> 起，编码器不冻，不先跑一份普通 SFT。
+    OpenPI 的 <code>scripts/train.py</code> 没有 action-prefix，不能代替 Step 7。29999 是另一条普通 SFT，本流程不用它初始化。
+  </div>
+  <div class="note bad">
+    不要碰这些：
+    <code>pi05_cobot_screw_sorting_single_two_staged_rlt</code> /
+    <code>pi05_cobot_screw_sorting_single_joint_vla_rlt</code>（本机 openpi 新加的，是另一条算法）；
+    不要把 fork 换成 <code>/home/xlk/work/openpi</code>；
+    不要把 <code>action_horizon</code> 改成 16 去省显存。
+  </div>
+</section>
+
+<!-- 1 -->
+<section id="s1">
+  <h2><span class="n done">1</span>GPU 环境（已完成 · 只自检）</h2>
+  <p class="io"><span class="who gpu">GPU</span> 输入：已有 <code>.venv</code> + fork。输出：确认 jax 见 CUDA、openpi 来自 expo-ft fork。不要 <code>git clone</code>，不要 <code>uv sync</code>。</p>
+
+<pre><button class="copy" onclick="cp(this)">复制</button><code>cd /home/xlk/work/expo-ft
+source .venv/bin/activate
+
+python -c "import jax, openpi; print(jax.devices()); print(openpi.__file__)"
+<span class="c"># 期望：cuda:0   且路径含 expo_ft/agents/vla/openpi</span>
+
+git -C expo_ft/agents/vla/openpi rev-parse --abbrev-ref HEAD
+git -C expo_ft/agents/vla/openpi rev-parse --short HEAD
+<span class="c"># 期望：real-time-expo-ft / 2abe462</span>
+
+nvidia-smi --query-gpu=name,memory.total --format=csv,noheader
+<span class="c"># 期望：1 行  NVIDIA GeForce RTX 3090, 24576 MiB</span></code></pre>
+
+  <div class="note bad">
+    全量 pi05、编码器不冻、batch 64 放在 H20（脚本里 <code>CUDA_VISIBLE_DEVICES=0,1,2,3</code>）。
+    本机 3090 只跑在线 RL：<code>CUDA_VISIBLE_DEVICES=0</code>，<code>batch_size=8</code>，<code>N=8</code>。
+  </div>
+</section>
+
+<!-- 2 -->
+<section id="s2">
+  <h2><span class="n done">2</span>Cobot TrainConfig 注入（已完成 · 只自检）</h2>
+  <p class="io"><span class="who gpu">GPU</span> 输入：fork 里已有 cobot 文件。输出：<code>get_config</code> 成功。不要再从 <code>/home/xlk/work/openpi</code> 覆盖拷贝。</p>
+
+<pre><button class="copy" onclick="cp(this)">复制</button><code>cd /home/xlk/work/expo-ft
+source .venv/bin/activate
+python - &lt;&lt;'PY'
+from openpi.training.config import get_config
+c = get_config("pi05_cobot_screw_sorting")
+print(type(c.data).__name__)
+print(c.data.default_prompt)
+print("adapt_to_pi", c.data.adapt_to_pi)
+print("assets", c.data.assets)
+print("action_horizon", c.model.action_horizon, "action_dim", c.model.action_dim)
+print("weight_loader", c.weight_loader)
+PY
+<span class="c"># 期望：LeRobotCobotSingleArmDataConfig / adapt_to_pi False / horizon 50
+# weight_loader 指向 .../pi05_base/params</span></code></pre>
+
+  <div class="note warn">
+    这条 fork 里注入的是 <code>pi05_cobot_screw_sorting</code>，初始权重是 <code>pi05_base</code>。
+    没有再放 <code>pi05_cobot_screw_sorting_single</code>。本机 <code>/home/xlk/work/openpi</code> 里指向 29999 的那条配置不在本流程里。
+  </div>
+</section>
+
+<!-- 3 -->
+<section id="s3">
+  <h2><span class="n done">3</span>IPC 环境（已完成 · 上机时再验 ROS）</h2>
+  <p class="io"><span class="who ipc">IPC</span> 输入：<code>client/.venv</code> 已精简安装（无 DROID）。输出：能 import rospy + openpi_client + real_env。</p>
+
+<pre><button class="copy" onclick="cp(this)">复制</button><code>ls /home/xlk/work/expo-ft/client/.venv/bin/python
+<span class="c"># 已存在就不要 uv venv / 不要 cd client &amp;&amp; uv sync（会拉 DROID/ZED）</span>
+
+source /opt/ros/noetic/setup.bash
+rostopic hz /camera_f/color/image_raw
+rostopic hz /camera_r/color/image_raw
+rostopic echo /puppet/joint_right -n 1
+
+cd /home/xlk/work/expo-ft
+source client/.venv/bin/activate
+export PYTHONPATH=/home/xlk/work/openpi:${PYTHONPATH:-}
+python -c "import rospy; from openpi_client import msgpack_numpy; from examples.mobile_aloha_AgileX.real_env import make_real_env; print('ipc ok')"</code></pre>
+  <div class="note">IPC 的 <code>real_env</code> 来自 <code>/home/xlk/work/openpi</code>（<code>SINGLE_ARM_NAME="right"</code> 未变）。learner 的 openpi 必须来自 expo-ft fork。</div>
+</section>
+
+<!-- 4 -->
+<section id="s4">
+  <h2><span class="n">4</span>已落地的代码（对照仓库）</h2>
+  <p class="io">输入：Step 1–3 已完成。输出：下列文件存在且能 import。闭环：<code>python -c "from configs.task.cobot_screw_sorting import get_config; print(get_config().example_action.shape)"</code> → <code>(1,7)</code>。</p>
+
+  <div class="delta">
+    下面是已经落地的代码，用来对照仓库，不必再新建一份。脚本以 <code>scripts/cobot_screw_sorting/*.sh</code> 为准。
+  </div>
+
+  <h3>4.1 新建 <code>client/envs/cobot_env.py</code></h3>
+  <p><code>run_client.create_env</code> 会 <code>env = task_config.env(**dict(task_config), video_dir=..., env_usage=...)</code>，所以多余字段必须进 <code>**kwargs</code>。</p>
+<pre><button class="copy" onclick="cp(this)">复制</button><code><span class="file"># client/envs/cobot_env.py</span>
+"""Cobot Magic single-arm env. Same RPC surface as DroidEnv for run_client.py."""
+import numpy as np
+from openpi_client import image_tools
+from client.real_utils.detector import success_detector_manual
+from examples.mobile_aloha_AgileX.real_env import make_real_env
+
+
+class CobotMagicEnv:
+    def __init__(
+        self,
+        language_instruction,
+        image_size=(180, 320),
+        control_hz=30,
+        auto_reset_steps=400,
+        video_dir=None,
+        use_single_arm=True,
+        **kwargs,
+    ):
+        self.language_instruction = language_instruction
+        self.image_size = tuple(image_size)
+        self.control_hz = control_hz
+        self.auto_reset_steps = int(auto_reset_steps)
+        self.video_dir = video_dir
+        self._env = make_real_env(
+            init_node=True,
+            control_freq_hz=control_hz,
+            use_single_arm=use_single_arm,   <span class="c"># real_env.SINGLE_ARM_NAME == "right"</span>
+        )
+        self._steps = 0
+        self.prev_obs = None
+
+    def reset(self):
+        self._steps = 0
+        self._env.reset()
+        return self.get_observation()
+
+    def _pack(self, raw):
+        def _img(x):
+            x = np.asarray(x)
+            if x.ndim == 3 and x.shape[0] == 3:
+                x = np.transpose(x, (1, 2, 0))
+            return image_tools.convert_to_uint8(
+                image_tools.resize_with_pad(x, self.image_size[0], self.image_size[1])
+            )
+        imgs = raw["images"]
+        qpos = np.asarray(raw["qpos"], np.float32).reshape(-1)
+        if qpos.shape[0] != 7:
+            raise ValueError(f"single-arm qpos must be 7D, got {qpos.shape}")
+        return {
+            "observation.images.cam_high": _img(imgs["cam_high"]),
+            "observation.images.cam_right_wrist": _img(imgs["cam_right_wrist"]),
+            "observation.state": qpos,
+            "prompt": self.language_instruction,
+        }
+
+    def get_observation(self):
+        raw = self._env.get_observation()
+        self.prev_obs = raw
+        return self._pack(raw)
+
+    def step(self, action):
+        self._steps += 1
+        action = np.asarray(action, np.float64).reshape(-1)[:7]
+        self._env.step(action)   <span class="c"># 绝对关节；gripper 偏置已在 real_env 内 -0.005</span>
+        return {"executed_action": action}
+
+    def get_info_for_step(self, raw_obs=None):
+        time_stop = self._steps &gt;= self.auto_reset_steps
+        manual = success_detector_manual()   <span class="c"># 终端输入 1=success 2=reset</span>
+        success = manual == "success"
+        terminate = manual == "reset" or time_stop
+        done = bool(success or terminate)
+        return done, success, (1.0 if success else 0.0), (0.0 if done else 1.0)
+
+    def render(self, *args, **kwargs):
+        return None</code></pre>
+
+  <h3>4.2 新建 <code>configs/task/cobot_screw_sorting.py</code></h3>
+<pre><button class="copy" onclick="cp(this)">复制</button><code><span class="file"># configs/task/cobot_screw_sorting.py</span>
+import ml_collections
+import numpy as np
+
+def get_config():
+    c = ml_collections.ConfigDict()
+    c.env_type = "cobot"
+    c.env_name = "cobot_screw_sorting_single"
+    try:
+        from client.envs.cobot_env import CobotMagicEnv
+        c.env = CobotMagicEnv
+    except Exception:
+        print("Not importing cobot env (ok on GPU learner)")
+
+    c.language_instruction = (
+        "Please sort and return the silver screws in the grey box to their proper places."
+    )
+    c.action_space = "joint_position"
+    c.gripper_action_space = "position"
+    c.example_action = np.zeros((1, 7), np.float32)
+    c.image_size = (180, 320)
+    c.control_hz = 30
+    c.auto_reset_steps = 400          <span class="c"># ~13s @ 30Hz；按任务改</span>
+    c.edit_action_xyzg = False
+    c.use_single_arm = True
+    c.critic_camera_keys = ("base_0_rgb", "right_wrist_0_rgb")
+    return c</code></pre>
+
+  <h3>4.3 <code>expo_ft/env/cobot_utils.py</code> 读 LeRobot</h3>
+  <p>实现已在仓库里。<code>datapath</code> 是含 <code>meta/info.json</code> 的数据集根目录。H20 上 <code>offline_train.sh</code> 的默认集是 <code>$HF_LEROBOT_HOME/screw_sorting_single_sft_ep279_annotated</code>（279 段，115130 帧）。相机特征的 <code>dtype</code> 是 <code>image</code>，图像在 parquet 里。OpenPI 的 <code>LeRobotDataset.__getitem__</code> 也是这条路径：只有 <code>dtype=video</code> 才会去打开 mp4。</p>
+  <p>旁边的 <code>videos/chunk-000/cam_high/</code> 和 <code>cam_right_wrist/</code> 不是训练图。第 66 段 mp4 有 451 帧，parquet 只有 417 帧，对不上。loader 按 episode 并行读 parquet，再缩到 224。环境变量 <code>COBOT_LOAD_WORKERS</code> 默认 8。进度条 <code>cobot lerobot</code> 的单位是 episode，不是帧。hdf5 只是转 LeRobot 之前的原始录制，这条训练不吃它。</p>
+  <div class="note warn">
+    OpenPI 的 <code>scripts/train.py</code> 用 <code>num_workers=8</code> 的 DataLoader，训练走一步才解码当前 batch，所以索引建完就能出 step。这边的回放缓冲区要先装进全部帧，<code>cobot lerobot</code> 走完才会开始梯度。这是启动时间的差别，不是又换了一套图像。
+  </div>
+
+  <h3>4.4 新建 <code>expo_ft/env/task_dataset.py</code>，四处入口只改调用</h3>
+<pre><button class="copy" onclick="cp(this)">复制</button><code><span class="file"># expo_ft/env/task_dataset.py</span>
+from expo_ft.env.droid_utils import process_droid_dataset
+from expo_ft.env.cobot_utils import process_cobot_dataset
+
+def load_task_dataset(path, task_config, num_data=None):
+    if task_config.env_type == "droid":
+        return process_droid_dataset(path, task_config, num_data=num_data)
+    if task_config.env_type == "cobot":
+        return process_cobot_dataset(path, task_config, num_data=num_data)
+    raise ValueError(f"Unsupported env_type: {task_config.env_type}")</code></pre>
+
+  <p>四个入口已经改成走 <code>load_task_dataset</code>。下面是落地后的调用，用来对照，不必再改一遍。</p>
+
+  <h4>A. <code>train_pi_robo.py</code> / <code>train_pi_robo_async.py</code>（同一改法）</h4>
+<pre><button class="copy" onclick="cp(this)">复制</button><code><span class="c"># 删掉 from expo_ft.env.droid_utils import process_droid_dataset</span>
+from expo_ft.env.task_dataset import load_task_dataset
+
+<span class="c"># 把</span>
+if FLAGS.config_task.env_type == "droid":
+    dataset = process_droid_dataset(...)
+else:
+    raise ValueError(...)
+<span class="c"># 换成</span>
+dataset = load_task_dataset(FLAGS.dataset_path, FLAGS.config_task, FLAGS.num_data)</code></pre>
+  <p>这两处已经用 <code>critic_camera_keys = tuple(getattr(FLAGS.config_task, "critic_camera_keys", CRITIC_CAMERA_KEYS))</code>，task 配了右腕就不用再改 critic 块。</p>
+
+  <h4>B. <code>eval_droid_policy.py</code></h4>
+<pre><button class="copy" onclick="cp(this)">复制</button><code><span class="c"># 删掉这段 raise：</span>
+if config_task.env_type != "droid":
+    raise ValueError("This script is for DROID evaluation only; ...")
+
+<span class="c"># 删掉 from expo_ft.env.droid_utils import process_droid_dataset</span>
+from expo_ft.env.task_dataset import load_task_dataset
+
+<span class="c"># process_droid_dataset(...) 换成</span>
+dataset = load_task_dataset(FLAGS.dataset_path, config_task, FLAGS.num_data)</code></pre>
+  <p>eval 的 critic example 已经按 task keys 建，不用再改。</p>
+
+  <h4>C. <code>train_offline_rtc.py</code>（已改）</h4>
+  <p>raise 已去掉，数据集走 <code>load_task_dataset</code>，critic example 按 task 的 <code>critic_camera_keys</code> 建，不再写死左腕。对照如下：</p>
+<pre><button class="copy" onclick="cp(this)">复制</button><code><span class="c"># 1) import</span>
+from expo_ft.env.task_dataset import load_task_dataset
+from expo_ft.env.droid_utils import process_droid_dataset   <span class="c"># 删这行</span>
+from expo_ft.agents.alg.batch_utils import CRITIC_CAMERA_KEYS
+from expo_ft.data.replay_buffer import create_replay_buffer, _critic_key_to_storage
+
+<span class="c"># 2) 删掉 L75-76 的 env_type raise</span>
+
+<span class="c"># 3) dataset =</span>
+dataset = load_task_dataset(FLAGS.dataset_path, FLAGS.config_task, FLAGS.num_data)
+
+<span class="c"># 4) 替换 create_replay_buffer + critic example（约 L124-151）为：</span>
+critic_camera_keys = tuple(getattr(FLAGS.config_task, "critic_camera_keys", CRITIC_CAMERA_KEYS))
+replay_buffer = create_replay_buffer(
+    config=FLAGS.config,
+    example_action=example_action,
+    capacity=len(dataset),
+    task_description=task_description,
+    replan_steps=FLAGS.replan_steps,
+    seed=FLAGS.seed,
+    critic_camera_keys=critic_camera_keys,
+)
+
+critic_example = {
+    _critic_key_to_storage(k): replay_buffer.dataset_dict[_critic_key_to_storage(k)][0][np.newaxis]
+    for k in critic_camera_keys
+}
+critic_example["state"] = replay_buffer.dataset_dict["state"][0][np.newaxis]
+critic_example["actions"] = replay_buffer.dataset_dict["actions"][0][np.newaxis]
+agent_example_observation, agent_example_state, agent_example_action = (
+    replay_buffer.convert_to_critic_format(critic_example)
+)</code></pre>
+  <p><code>run_client.py</code> 只在 <code>env_type == "droid"</code> 时读 SpaceMouse。Cobot 的 <code>env_type</code> 是 <code>cobot</code>，这条分支不会走。键盘 <code>1</code>/<code>2</code> 只给回合打成功或失败的标签，不接管手臂。DROID 的 pick 可以接管，但不是每一步都必须有人干预；只有 <code>BCLearner</code> 才要求人在回路的样本。本任务的 actor 抽的是演示和键盘标成成功的在线回合。</p>
+  <div class="note">
+    <code>from examples.mobile_aloha_AgileX.real_env import make_real_env</code> 在 IDE 里的波浪线是类型检查找不到这个模块。它在 <code>/home/xlk/work/openpi</code>，<code>run_policy.sh</code> 已把该目录放进 <code>PYTHONPATH</code>。GPU learner 打印 <code>Not importing cobot env</code> 是预期的：那边没有 ROS。
+  </div>
+
+  <h3>4.5 脚本已在 <code>scripts/cobot_screw_sorting/</code></h3>
+  <p>以仓库里的 sh 为准，不要另抄一份。<code>offline_train.sh</code> 只在 H20 跑。本机的 <code>run_server.sh</code>、<code>eval_rtc_sft.sh</code>、<code>eval_policy.sh</code> 都会先检查 <code>checkpoints/from_h20/</code> 是否已下载。</p>
+
+<table>
+    <tr><th>脚本</th><th>在哪跑</th><th>做什么</th></tr>
+    <tr><td><code>offline_train.sh</code></td><td>H20</td><td>RTC-SFT。从 <code>pi05_base</code> 起，编码器不冻结，bs=64，<code>p1_max_delay=10</code>，4000 步。</td></tr>
+    <tr><td><code>run_policy.sh</code></td><td>IPC</td><td>ROS + <code>client/.venv</code>，拨本机 8103，建 <code>CobotMagicEnv</code>。</td></tr>
+    <tr><td><code>run_server.sh</code></td><td>本机 3090</td><td>同步 online RL。没有 <code>checkpoints/from_h20/.../4000/params</code> 就退出。</td></tr>
+    <tr><td><code>eval_rtc_sft.sh</code></td><td>本机 3090</td><td>只评 H20 的 RTC 权重。不加载 online checkpoint，不用 Q / edit。</td></tr>
+    <tr><td><code>eval_policy.sh</code></td><td>本机 3090</td><td>评 online RL。同一份 H20 权重，再读 <code>rt_screw_single_delay5</code>。</td></tr>
+  </table>
+  <p>复制命令时跑仓库里的 sh，不要把下面步骤里的说明再写成另一份脚本。</p>
+  <div class="note bad">
+    不要跑 <code>run_server_async.sh</code> / <code>train_pi_robo_async.py</code>。那是把 0 号卡当采样、其余卡当更新线程，至少要 2 张 GPU。本机只有一张 3090。
+    <code>--delay=5</code> 是另一件事：控制环上提前开算，同步训练、异步训练、评测都要留着。
+  </div>
+  <div class="note warn">
+    作者 RTC-SFT 是 <code>freeze_pi05_encoder=False</code>、bs=64、从 <code>pi05_base</code> 起。本任务模型仍是全量 pi05、<code>action_horizon=50</code>（Cobot 配置，不是作者的 LoRA / horizon 16）。这一步放在 H20。
+  </div>
+</section>
+
+<!-- 5 -->
+<section id="s5">
+  <h2><span class="n done">5</span>已有 LeRobot 数据验收（不采数）</h2>
+  <p class="io"><span class="who gate">闸门</span> 输入：本机 <code>screw_sorting_single_sft</code>。输出：7D + 两相机 + 130 段。闭环：读 <code>meta/info.json</code>，再抽 1 段过 loader。</p>
+  <div class="kv">
+    <b>本机路径</b><span><code>/data/huggingface/lerobot/openpi/screw_sorting_single_sft</code></span>
+    <b>H20 路径</b><span><code>$HF_LEROBOT_HOME/screw_sorting_single_sft_ep279_annotated</code>，默认 <code>/workspace/huggingface/lerobot/screw_sorting_single_sft_ep279_annotated</code>。这是 <code>offline_train.sh</code> 的 <code>repo_id</code>。目录不同就设 <code>LEROBOT_ROOT</code>，norm 的 <code>asset_id</code> 必须是同一个名字。</span>
+    <b>合法 shape</b><span><code>action</code> / <code>observation.state</code> = [7]；图 <code>observation.images.cam_high</code>、<code>observation.images.cam_right_wrist</code>，<code>dtype=image</code>（在 parquet 里，不在 mp4 里）</span>
+    <b>规模</b><span>H20 这套：279 episodes，115130 frames，30 Hz，LeRobot v2.1，<code>agilex_cobot</code>。本机旧目录 <code>screw_sorting_single_sft</code> 曾读到 130 段、53231 帧，不要和 H20 这套混用同一份 norm。</span>
+    <b>prompt</b><span><code>tasks.jsonl</code> 以句号结尾。loader 用这一句。</span>
+  </div>
+<pre><button class="copy" onclick="cp(this)">复制</button><code>python - &lt;&lt;'PY'
+import json
+root="/data/huggingface/lerobot/openpi/screw_sorting_single_sft"
+info=json.load(open(root+"/meta/info.json"))
+print(info["codebase_version"], info["total_episodes"], info["total_frames"], info["fps"])
+for k in ("action","observation.state","observation.images.cam_high","observation.images.cam_right_wrist"):
+    print(k, info["features"][k]["shape"], info["features"][k]["dtype"])
+print(open(root+"/meta/tasks.jsonl").read().strip())
+PY</code></pre>
+  <div class="note">跳过官方 <code>collect_data.sh</code>。作者采集写成 hdf5，再转成 LeRobot；训练读的是转完的数据集。本任务数据本来就是 LeRobot，<code>cobot_utils.py</code> 直接读它，吐出和作者 hdf5 loader 相同的逐步字典。</div>
+</section>
+
+<!-- 6 -->
+<section id="s6">
+  <h2><span class="n">6</span>H20 上算 norm stats</h2>
+  <p class="io"><span class="who gpu">H20</span> 输入：<code>pi05_cobot_screw_sorting</code> 指向的 LeRobot。输出：<code>expo-ft/assets/pi05_cobot_screw_sorting/screw_sorting_single_sft_ep279_annotated/norm_stats.json</code>。闭环：json 里 state / action 的统计长度是 padding 后的维（动作维 32 里有效 7 维）。</p>
+  <p>这一步在 RTC 之前做。<code>offline_train.sh</code> 里 <code>DO_STEP3</code> 默认是 0：文件已经在仓库里就跳过。在线 RL 用下载回来的这份 stats，不用 29999 的 assets。TrainConfig 里的 <code>num_train_steps</code> 和这一步无关。</p>
+<pre><button class="copy" onclick="cp(this)">复制</button><code><span class="c"># 在 H20 的 openpi 仓库里，和用户那份 DO_STEP 脚本同一套环境变量</span>
+export HF_LEROBOT_HOME=/workspace/huggingface/lerobot
+export HF_HOME=/workspace/huggingface
+uv run scripts/compute_norm_stats.py --config-name pi05_cobot_screw_sorting
+ls /workspace/openpi/assets/pi05_cobot_screw_sorting/screw_sorting/norm_stats.json</code></pre>
+  <div class="note bad">不要用 29999 的 norm stats 去配从 <code>pi05_base</code> 起的这次 RTC。stats 和这次 H20 数据一起走。</div>
+</section>
+
+<!-- 7 -->
+<section id="s7">
+  <h2><span class="n">7</span>H20：RTC-SFT</h2>
+  <p class="io"><span class="who gpu">H20</span> 输入：<code>pi05_base</code> + LeRobot + 上一步的 norm。输出：<code>checkpoints/cobot_screw_rtc_offline/rtc_screw_maxdelay10/checkpoints/4000/params</code>。闭环：loss 在下降，并且 <code>4000/params</code> 目录存在。</p>
+  <p>对应作者 <code>scripts/dynamic_pick/offline_train.sh</code> → <code>train_offline_rtc.py</code>。每个样本抽 <code>d ~ Unif{0..10}</code>，prefix 保持干净，损失只在 postfix 上。这就是任务上的那一次微调，前面不再跑 OpenPI <code>scripts/train.py</code>。</p>
+<pre><button class="copy" onclick="cp(this)">复制</button><code>cd /home/xlk/work/expo-ft   <span class="c"># H20 上是这份仓库的路径</span>
+bash scripts/cobot_screw_sorting/offline_train.sh</code></pre>
+  <table>
+    <tr><th>旗标</th><th>为什么是这个值</th></tr>
+    <tr><td><code>pi05_config_name=pi05_cobot_screw_sorting</code></td><td>Cobot 单臂变换，不是 DROID cartesian，也不是 LoRA horizon 16</td></tr>
+    <tr><td><code>pi05_weight_loader_path=$PI05_BASE/params</code></td><td>从 <code>pi05_base</code> 起。不要指向 29999</td></tr>
+    <tr><td><code>freeze_pi05_encoder=False</code></td><td>和作者 RTC-SFT 一致。在线阶段才会冻结编码器</td></tr>
+    <tr><td><code>batch_size=64</code></td><td>作者配方。H20 四卡环境；本机 3090 不跑这一步</td></tr>
+    <tr><td><code>p1_max_delay=10</code></td><td>训练时 prefix 最长 10 步，覆盖部署的 delay=5，且 10 &lt; horizon 50</td></tr>
+    <tr><td><code>replan_steps=8</code></td><td>和 online / eval 同一执行窗</td></tr>
+    <tr><td><code>max_steps=4000</code>，每 2000 存一次</td><td>作者 dynamic_pick 的步数。见下面的遍数。后面的脚本默认读 <code>4000/params</code></td></tr>
+    <tr><td><code>--resume</code></td><td>目录已在但里面没有 step 时，按新训练继续。不要为了重跑去删目录再指望脚本自己建</td></tr>
+    <tr><td><code>CUDA_VISIBLE_DEVICES=0,1,2,3</code></td><td>H20。本机不要照抄。<code>fsdp_devices=1</code>，四张卡各持有一份完整 pi05</td></tr>
+  </table>
+
+  <h3>4000 步和配置里的 30000</h3>
+  <p><code>train_offline_rtc.py</code> 的循环只读命令行 <code>--max_steps</code>。fork 里 <code>pi05_cobot_screw_sorting</code> 的 <code>num_train_steps=30_000</code> 只给 OpenPI <code>scripts/train.py</code>。这次 <code>--config.pi05_config_name</code> 用的是模型、数据变换、norm 和 <code>pi05_base</code> 路径。</p>
+  <p>作者两处示例都是大约 4000 步，不是 30000。<code>scripts/pick/finetune_droid.sh</code> 写 <code>--num_train_steps=4001</code>。<code>scripts/dynamic_pick/offline_train.sh</code> 写 <code>--max_steps=4000</code>。README 写明他们测过的任务 4000 步就够。本仓库的 <code>eval_rtc_sft.sh</code>、<code>eval_policy.sh</code>、<code>run_server.sh</code> 默认 <code>RTC_PARAMS=.../checkpoints/4000/params</code>。只改 <code>max_steps</code>、不改这三处，评测和在线仍会去找 4000。</p>
+  <p>遍数不是 DataLoader 那种按顺序走完一轮。RTC 每一步只用 actor 的一个 batch（64 帧），从回放缓冲区随机抽，可以重复。期望次数 = 步数 × 64 / 总帧数。</p>
+  <table>
+    <tr><th>量</th><th>值</th></tr>
+    <tr><td>总帧数</td><td>115130（<code>meta/info.json</code> 的 <code>total_frames</code>）</td></tr>
+    <tr><td>每步送进损失的帧</td><td>64。<code>RTCLearner.update</code> 只用 <code>actor_batch</code></td></tr>
+    <tr><td>抽满一遍的步数</td><td>115130 / 64 = 1798.9</td></tr>
+    <tr><td>4000 步</td><td>4000 × 64 / 115130 = 2.22。每帧期望被抽到 2.22 次</td></tr>
+    <tr><td>10000 步</td><td>约 5.6 遍。若改这个数，三份本机脚本的 <code>RTC_PARAMS</code> 要指到对应的 step 目录</td></tr>
+  </table>
+  <div class="note">
+    先保持 4000，看 loss 和 <code>eval_rtc_sft.sh</code>。loss 还在明显下降时，再把 <code>--max_steps</code> 调到约 10000，并改 <code>RTC_PARAMS</code>。不要改 <code>config.py</code> 的 <code>num_train_steps</code> 来拉长这次训练。
+  </div>
+
+  <h3>训练时 RTC 的代码</h3>
+  <p>离线阶段就是训练时 RTC。入口 <code>scripts/dynamic_pick/offline_train.sh</code> 和本任务的 <code>offline_train.sh</code> 都进 <code>train_offline_rtc.py</code>。</p>
+  <table>
+    <tr><th>位置</th><th>作用</th></tr>
+    <tr><td><code>configs/model/rtc_pi_config.py</code></td><td><code>p1_use_prefix_conditioning=True</code>。脚本再用 <code>--config.p1_max_delay=10</code> 盖掉默认的 −1</td></tr>
+    <tr><td><code>expo_ft/agents/alg/rtc.py</code> 的 <code>update_actor</code></td><td>开关打开时调用 <code>train_step_p1_prefix</code>，否则走普通 <code>train_step</code></td></tr>
+    <tr><td><code>expo_ft/agents/vla/pi05.py</code> 的 <code>train_step_p1_prefix</code></td><td><code>d ~ Unif{0..p1_max_delay}</code>。前 d 个动作保持干净，损失只在 postfix 上</td></tr>
+  </table>
+  <p><code>RTCLearner</code> 不使用 target 网络。<code>build_pi05(..., init_target=False)</code>，<code>pi05_base</code> 只加载一次。再初始化一份 target 会在四张卡上各建第二份完整训练状态，H20 会在这里 <code>RESOURCE_EXHAUSTED</code>（日志里先出现约 50 GiB 的 rematerialization 警告，然后分配约 1.96 GiB 失败）。ROCm / TPU 那两行是 JAX 探测后端，训练走 CUDA。</p>
+  <div class="note warn">
+    日志里的 <code>FileExistsError: .../checkpoints already exists</code>：目录在，又没有 <code>--overwrite</code> 或 <code>--resume</code>。脚本已带 <code>--resume</code>。没有 step 文件时会放弃续训，从头开始。权重加载和 <code>cobot lerobot</code> 重叠进行，模型初始化不再等 11 万帧解码完。
+  </div>
+</section>
+
+<!-- 7b -->
+<section id="s7b">
+  <h2><span class="n">7b</span>下载到本仓库</h2>
+  <p class="io"><span class="who gate">闸门</span> 输入：H20 上的 <code>4000/params</code> 和 assets。输出：本机 <code>checkpoints/from_h20/</code>。闭环：下面两条 <code>test</code> 都成功。目录在 <code>.gitignore</code> 里，不会进 git。</p>
+<pre><button class="copy" onclick="cp(this)">复制</button><code>rsync -aP &lt;h20&gt;:&lt;expo-ft&gt;/checkpoints/cobot_screw_rtc_offline/rtc_screw_maxdelay10/ \
+  /home/xlk/work/expo-ft/checkpoints/from_h20/rtc_screw_maxdelay10/
+rsync -aP &lt;h20&gt;:/workspace/openpi/assets/pi05_cobot_screw_sorting/ \
+  /home/xlk/work/expo-ft/checkpoints/from_h20/assets/pi05_cobot_screw_sorting/
+
+test -d /home/xlk/work/expo-ft/checkpoints/from_h20/rtc_screw_maxdelay10/checkpoints/4000/params \
+ &amp;&amp; test -f /home/xlk/work/expo-ft/checkpoints/from_h20/assets/pi05_cobot_screw_sorting/screw_sorting/norm_stats.json \
+ &amp;&amp; echo from_h20 ok</code></pre>
+  <div class="note">现在本机还没有 <code>checkpoints/from_h20/</code>。<code>run_server.sh</code>、<code>eval_rtc_sft.sh</code>、<code>eval_policy.sh</code> 发现 params 目录不存在会直接退出。这是这一步的闸门，不是脚本写错。</div>
+</section>
+
+<!-- 8 -->
+<section id="s8">
+  <h2><span class="n">8</span>本机真机 online RL</h2>
+  <p class="io"><span class="who gpu">GPU</span> + <span class="who ipc">IPC</span> 输入：下载好的 RTC 权重和 norm，ROS 已就绪。输出：online 梯度写到 <code>checkpoints/cobot_screw_online/rt_screw_single_delay5/</code>。闭环：client 连上 8103，只有右臂动，键盘 <code>1</code>/<code>2</code> 能结束回合，回合结束时梯度开始。</p>
+
+  <h3>启动顺序</h3>
+  <ol>
+    <li><span class="who ipc">IPC</span> 厂商 ROS（相机 + Piper）已在跑</li>
+    <li><span class="who gpu">GPU</span> <code>run_server.sh</code>：先编译，再听 8103，然后 RPC <code>create_env</code></li>
+    <li><span class="who ipc">IPC</span> <code>run_policy.sh</code> 拨 GPU:8103。连不上每 5 秒重拨</li>
+  </ol>
+<pre><button class="copy" onclick="cp(this)">复制</button><code><span class="c"># 终端 B · 本机 GPU（编译要几分钟，先开）</span>
+bash scripts/cobot_screw_sorting/run_server.sh
+
+<span class="c"># 终端 A · IPC</span>
+SERVER_HOST=&lt;本机 LAN IP&gt; bash scripts/cobot_screw_sorting/run_policy.sh</code></pre>
+
+  <h3>控制环：30 Hz、<code>--delay=5</code>、<code>--replan_steps=8</code></h3>
+  <p>任务配置和 <code>CobotMagicEnv</code> 都把 <code>control_hz=30</code> 传给 <code>make_real_env</code>。手臂大约每 33 ms 收一条 7 维绝对关节。模型一次吐出 horizon 50，手臂只执行前 <code>replan_steps=8</code> 步（约 267 ms），然后换下一段。</p>
+  <p><code>delay=5</code> 是这 8 步里提前开算的步数。队列还剩 5 步（约 167 ms）时，后台开始推理；正在执行的这 5 步作为 prefix 送回去，新的一段必须接上这 5 步。第一段没有 prefix，同步算完再动。作者 dynamic_pick 也是 30 Hz、delay 5。</p>
+  <p>pi0.5 推理大约 150–200 ms。150 ms 落在这 167 ms 里面。接近 200 ms 时队列会空，日志里会出现同步等待。若要盖住 200 ms，把 <code>run_server.sh</code>、<code>eval_policy.sh</code>、<code>eval_rtc_sft.sh</code> 三处的 <code>--delay</code> 一起改成 7（约 233 ms）或 8（约 267 ms）。delay 不能大于 replan。当前脚本保持 5，和作者一致。</p>
+
+  <h3><code>run_server.sh</code> 里传给训练的旗标</h3>
+  <table>
+    <tr><th>旗标</th><th>含义</th></tr>
+    <tr><td><code>batch_size=8</code></td><td>一次梯度的样本条数。3090 上的值，和候选数无关。</td></tr>
+    <tr><td><code>update_type=episode</code>，<code>step_interval=30</code></td><td>每攒约 30 拍记一次更新，在回合结束、手臂回零时成批做。</td></tr>
+    <tr><td><code>offline_ratio=0</code></td><td>演示整份插进同一个 replay。critic 抽全部（演示 + 成功 + 失败）；actor 只抽成功。</td></tr>
+    <tr><td><code>N=8</code>，<code>n_edit_samples=8</code></td><td>部署时 8 条基座窗，每条再加一条残差。Q 在 16 条里选。</td></tr>
+    <tr><td><code>filter_N=8</code>，<code>filter_n_edit=1</code></td><td>训练 backup 用 8 个噪声种子，只留 1 个去噪，再加 1 条残差。不是部署的 N。</td></tr>
+    <tr><td><code>edit_scale=0.1</code></td><td>残差系数：执行动作 = 基座 + 0.1 × 残差。不是混合权重。设成 0 会让对数概率出现除以 0，训练不合法。Q 和 prefix BC 仍会跑，但 edit 这一项不能在 0 上训。</td></tr>
+    <tr><td><code>filter_add_delayed_obs=True</code></td><td><code>Q_f</code> 同时看当前观测和 delay 步之前的观测。</td></tr>
+    <tr><td><code>valids_keep_terminal_windows=True</code></td><td>没走满 8 拍就结束的窗仍可进损失。超时截断（done 且 mask）的窗 <code>valids=0</code>。</td></tr>
+    <tr><td><code>pi05_weight_loader_path</code></td><td>H20 的 <code>4000/params</code>。在线从这里继续，编码器冻结，Q 和 edit 在学，基座继续做 prefix BC（<code>train_base_actor=True</code>），delay 用部署的 5 而不是随机 d。</td></tr>
+    <tr><td><code>--delay=5 --replan_steps=8</code></td><td>和 RTC 训练的 <code>p1_max_delay=10</code>、评测脚本同一套数。</td></tr>
+  </table>
+  <p>脚本没有 <code>--checkpoint_buffer</code>。在线 replay 在内存里，重启不会接着上次的 buffer。模型每 20000 步存一次。</p>
+
+  <h3>数据怎么进训练</h3>
+  <p>开训时整份 LeRobot 过 Cobot 的 repack、关节 delta、下载来的 norm，插进一个 <code>PiReplayBuffer</code>，标成成功演示。真机每一拍先排队，回合结束才写入：IPC 终端 <code>1</code> 成功，<code>2</code> 或步数到 <code>auto_reset_steps</code> 为失败。不会再写成一份新的 LeRobot。更新在 10 个回合之后、并且样本不少于 batch 时解开；回合结束时按大约每 30 拍一次梯度来补。</p>
+
+  <h3>情节结束和起点</h3>
+  <p>细节和公式在下一节。这里只记操作：IPC 那个终端按 <code>1</code> 成功、<code>2</code> 失败；400 步（约 13 s）没按也记失败。复位是 OpenPI <code>real_env.reset()</code> 里写死的近零位，夹爪 0.09。单臂时左臂停在左臂复位角，右臂跟踪策略。</p>
+
+  <div class="note bad">
+    第一次：清空桌面、急停在手，可先把 <code>auto_reset_steps</code> 改小（例如 80）。确认只有右臂动。client 挂了只重启 client。
+    本机不要跑 async，不要在 3090 上再跑一遍 RTC-SFT，不要把 <code>N</code> 改成作者的 32。
+  </div>
+</section>
+
+<!-- ALG -->
+<section id="salg">
+  <h2><span class="n">∗</span>Cobot 上的情节、几个 8、以及算法</h2>
+  <p class="io">符号按当前脚本：<code>control_hz=30</code>，<code>action_dim=7</code>（右臂），<code>H=50</code>，<code>r=replan_steps=8</code>，<code>d=delay=5</code>，<code>γ=0.99</code>。<code>edit_action_xyzg=False</code>，残差 7 维都保留。</p>
+
+  <h3>Cobot 怎么结束、怎么回到起点</h3>
+  <p>没有作者那套抓取检测，也没有方块随机落点。<code>CobotMagicEnv.get_info_for_step</code> 每一拍只看两件事：</p>
+  <ul>
+    <li>IPC 上跑 <code>run_policy.sh</code> 的终端：<code>1</code> 成功，<code>reward=1</code>；<code>2</code> 失败，<code>reward=0</code>。中间拍奖励是 0。</li>
+    <li>步数到 <code>auto_reset_steps=400</code>（30 Hz 下约 13 s）记为失败，<code>reward=0</code>。</li>
+  </ul>
+  <p><code>done</code> 时 <code>mask=0</code>，bootstrap 被截断。learner 在后台调用 <code>env.reset()</code>，同时做这一段攒下的梯度。</p>
+  <p><code>reset()</code> 走 OpenPI <code>real_env.reset()</code>：双臂平滑移到写死的近零位，夹爪 <code>0.09</code>。右臂是</p>
+<pre><code>右 [ -0.00133514, 0.00438690, 0.03452396, -0.05359745, -0.00476837, -0.00209808, 0.09 ]
+左 [ -0.00133514, 0.00209808, 0.01583099, -0.03261662, -0.00286102,  0.00095367, 0.09 ]</code></pre>
+  <p>单臂模式下，之后每一拍左臂都停在左臂这组复位角，只有右臂跟踪策略的绝对关节。任务配置没有另传起点，第一段和之后每一段都是这个位姿。</p>
+
+  <h3>脚本里每个 8</h3>
+  <table>
+    <tr><th>名字</th><th>出现在</th><th>数的是什么</th></tr>
+    <tr><td><code>replan_steps=8</code></td><td>控制环</td><td>一段里真正发给手臂的步数。展平后一条候选是 <code>8×7=56</code> 维。</td></tr>
+    <tr><td><code>N=8</code></td><td>真机推理</td><td>pi0.5 采 8 条基座窗。</td></tr>
+    <tr><td><code>n_edit_samples=8</code></td><td>真机推理</td><td>这 8 条上各加一条残差。Q 在 16 条里选。</td></tr>
+    <tr><td><code>filter_N=8</code></td><td>训练 backup</td><td>8 个噪声种子，<code>Q_f</code> 只留 1 个去噪。不是部署时的 N。</td></tr>
+    <tr><td><code>batch_size=8</code></td><td>梯度</td><td>一次更新的样本条数。和候选数无关。</td></tr>
+    <tr><td><code>filter_n_edit=1</code></td><td>训练 backup</td><td>不是 8。训练时只在筛中的那一条上再加 1 条残差。</td></tr>
+  </table>
+
+  <h3>1. RTC-SFT（H20，<code>train_step_p1_prefix</code>）</h3>
+  <p>实现在 <code>expo_ft/agents/vla/pi05.py</code> 的 <code>train_step_p1_prefix</code>。<code>expo_ft/agents/alg/rtc.py</code> 的 <code>update_actor</code> 在 <code>p1_use_prefix_conditioning</code> 为真时调用它。一条样本是观测 <code>o</code> 和干净动作块 <code>a∈R^{H×D}</code>，<code>D=32</code> 是 padding 后的动作维。每个样本抽</p>
+<pre><code>d ~ Unif{0, 1, …, 10}
+τ_b ~ 0.001 + 0.999 · Beta(1.5, 1)
+m_h = 1[h ≥ d]
+τ_h = τ_b · m_h
+x_h = τ_h ε_h + (1 − τ_h) a_h
+u_h = ε_h − a_h</code></pre>
+  <p><code>h&lt;d</code> 时 <code>τ_h=0</code>，所以 <code>x_h=a_h</code>，prefix 是干净动作。网络输出速度 <code>v_θ(o, x, τ)</code>。损失只加在 postfix 上：</p>
+<pre><code>L_RTC = ( Σ_{b,h} m_h · mean_D (v_θ − u)² ) / Σ_{b,h} m_h</code></pre>
+  <p><code>d=0</code> 时整段都进损失，就是普通 flow-matching BC。在线阶段同一函数，但 <code>d</code> 不再随机：回合前 <code>r</code> 步（还没有 prefix）用 <code>d=0</code>，之后用部署的 <code>d=5</code>。</p>
+
+  <h3>2. 真机一步怎么选出要执行的 8 拍</h3>
+  <p>队列还剩 <code>d=5</code> 拍时，用已经发出去的这 5 拍做 prefix，pi0.5 采 <code>N=8</code> 条整段，再切执行窗</p>
+<pre><code>w_i = chunk_i[d : d+r] ∈ R^{8×7},   i = 1…8</code></pre>
+  <p>edit actor 对每条基座采残差 <code>ρ_i</code>，乘上系数后加回去（<code>edit_scale=0.1</code>）：</p>
+<pre><code>ã_i = w_i + 0.1 · ρ_i,   ρ_i ~ π_edit(· | enc(o), s, w_i)</code></pre>
+  <p>候选集有 16 条，都在 <code>R^{56}</code>：</p>
+<pre><code>C = { w_1, …, w_8, ã_1, …, ã_8 }</code></pre>
+  <p>10 个 Q 里随机抽 <code>num_min_qs=2</code> 个，取得分最小的那个，再取最大：</p>
+<pre><code>Q̄(o, C_k) = min_{j∈J} Q_j(enc(o), C_k, s),   |J|=2
+k* = argmax_k Q̄(o, C_k)</code></pre>
+  <p>手臂执行 <code>C_{k*}</code> 的 8 拍。这 8 拍的最后 5 拍成为下一次的 prefix。</p>
+
+  <h3>3. 训练时 Q、<code>Q_f</code>、edit、基座各自的损失</h3>
+  <p>训练 backup 不去噪 8 条。先抽 <code>filter_N=8</code> 个噪声种子 <code>ε_1…ε_8</code>，<code>Q_f</code> 同时看当前观测和 delay 之前那一帧（<code>filter_add_delayed_obs=True</code>）。<code>filter_temperature=0</code>，所以</p>
+<pre><code>ε* = argmax_n Q_f(o', o_{t−d}, ε_n)</code></pre>
+  <p>只用 <code>ε*</code> 去噪出一条基座 <code>w</code>，再加 <code>filter_n_edit=1</code> 条残差 <code>ã</code>。TD 用的下一动作是这两条里 Q 更高的那条 <code>a*</code>。n-step 回报已经在 replay 里按窗加好（Cobot 中间奖励为 0，只有结束那一拍是 1 或 0）：</p>
+<pre><code>R = Σ_{i=0}^{7} γ^i r_{t+i}
+y = R + γ^8 · mask · min_{j∈J} Q'_j(o', a*)
+L_Q = mean( valids · (Q(o, a_buf) − y)² )</code></pre>
+  <p><code>γ^8 = 0.99^8 ≈ 0.9227</code>。超时截断的窗 <code>valids=0</code>，不进这个均值；回合自然结束但没走满 8 拍的窗因为 <code>valids_keep_terminal_windows=True</code> 仍保留。</p>
+  <p><code>Q_f</code> 的回归目标是基座那条的 Q，不是 argmax 之后的那条：</p>
+<pre><code>L_f = mean ( Q_f(o', ε*) − stopgrad(Q̄(o', w)) )²</code></pre>
+  <p>edit actor 是在 buffer 里的基座动作上做的。残差乘 <code>0.1</code> 之后，对数概率要减掉雅可比：</p>
+<pre><code>a = a_buf + 0.1 · ρ
+log π_scaled(a) = log π_edit(ρ) − 56 · log(0.1)
+L_edit = mean( α · log π_scaled(a) − Q(o, a) )</code></pre>
+  <p><code>56·log(0.1) ≈ −128.9</code>。温度 <code>α</code> 把熵拉向 <code>H* = −56/2 = −28</code>（<code>adjust_target_entropy=False</code>，不把 <code>log(edit_scale)</code> 再加进目标熵）。pi0.5 基座单独做第 1 节的 prefix BC，只在成功样本上，视觉编码器冻结。</p>
+
+  <h3>4. 一个数例</h3>
+  <p>某一拍队列还剩 5 步，prefix 已固定。为了能手算，下面只写执行窗第一拍、第一个关节，其余 55 维省略；Q 分数是假设值。脚本里是 8 条基座加 8 条残差，这里缩成 2+2，算法相同。</p>
+  <table>
+    <tr><th>候选</th><th>第一关节</th><th>Q̄</th></tr>
+    <tr><td><code>w_1</code></td><td>0.40</td><td>1.2</td></tr>
+    <tr><td><code>w_2</code></td><td>0.55</td><td>0.4</td></tr>
+    <tr><td><code>ã_1 = 0.40 + 0.1×0.20</code></td><td>0.42</td><td>1.5</td></tr>
+    <tr><td><code>ã_2 = 0.55 + 0.1×(−0.30)</code></td><td>0.52</td><td>0.9</td></tr>
+  </table>
+  <p><code>k* = ã_1</code>。相对基座，这个关节只挪了 <code>0.02</code>。手臂接着执行 <code>ã_1</code> 的 8 拍，其中最后 5 拍锁进下一次 prefix。</p>
+  <p>同一条转移若进训练 backup：8 个种子的 <code>Q_f</code> 为 <code>0.1, 0.4, 0.2, 0.0, 0.3, 0.15, 0.05, 0.25</code>，留下第 2 个，只去噪这一次得到 <code>w</code>。再采 1 条残差得到 <code>ã</code>。若 <code>Q̄(w)=1.1</code>、<code>Q̄(ã)=0.8</code>，则 <code>a*=w</code>，<code>Q_f</code> 的目标也是 <code>1.1</code>。若这一窗的第 8 拍是键盘 <code>1</code>，前面奖励为 0，则 <code>R = γ^7 · 1 ≈ 0.932</code>，<code>mask=0</code>（情节已结束），<code>y=0.932</code>，不再加 <code>γ^8 Q'</code>。</p>
+</section>
+
+<!-- 9 -->
+<section id="s9">
+  <h2><span class="n">9</span>本机评测</h2>
+  <p class="io">入口文件名是 <code>eval_droid_policy.py</code>，这是作者 DROID 实验留下的名字。它只在 GPU 上加载策略、听 8103，不创建机器人。真机仍由 IPC 的 <code>run_policy.sh</code> 按 <code>configs/task/cobot_screw_sorting.py</code> 建 <code>CobotMagicEnv</code>。<code>--dataset_path</code> 和 <code>--num_data=1</code> 只用来确定观测和动作的形状。</p>
+  <table>
+    <tr><th></th><th><code>eval_rtc_sft.sh</code></th><th><code>eval_policy.sh</code></th></tr>
+    <tr><td>何时</td><td>H20 权重下载之后、online 之前。单独看 RTC-SFT。</td><td>online 训出 checkpoint 之后。</td></tr>
+    <tr><td>config</td><td><code>rtc_pi_config.py</code>（RTCLearner）</td><td><code>realtime_expo_ft_pi_config.py</code></td></tr>
+    <tr><td>权重</td><td>只有 <code>from_h20</code> 的 params。不传 <code>--checkpoint_dir</code>，step 停在 0，用 loader 里的权重。</td><td>同一份 RTC 权重，再加 <code>checkpoints/cobot_screw_online/rt_screw_single_delay5/checkpoints</code></td></tr>
+    <tr><td>动作</td><td>prefix inpaint 的 pi0.5。不要加 <code>--only_base_actions</code>，那会关掉 prefix。</td><td>基座 + edit，Q 在 16 条里选。</td></tr>
+    <tr><td>delay</td><td><code>--delay=5 --replan_steps=8</code></td><td>同一对。和训练不一致就不要比成功率。</td></tr>
+  </table>
+<pre><button class="copy" onclick="cp(this)">复制</button><code><span class="c"># IPC 两次都是这一条</span>
+SERVER_HOST=&lt;本机 LAN IP&gt; bash scripts/cobot_screw_sorting/run_policy.sh
+
+<span class="c"># GPU：先看 RTC-SFT 本身</span>
+bash scripts/cobot_screw_sorting/eval_rtc_sft.sh
+
+<span class="c"># GPU：online 之后</span>
+bash scripts/cobot_screw_sorting/eval_policy.sh</code></pre>
+</section>
+
+<section>
+  <h2><span class="n">✓</span>逐步验收</h2>
+  <div class="bar"><i id="bar"></i></div>
+  <div class="checks" id="checks">
+    <label><input type="checkbox" data-k="1"/> fork 是 real-time-expo-ft @ 2abe462，本机 jax 见 1 张 CUDA</label>
+    <label><input type="checkbox" data-k="2"/> <code>get_config("pi05_cobot_screw_sorting")</code>：adapt_to_pi=False，horizon=50，指向 pi05_base</label>
+    <label><input type="checkbox" data-k="3"/> IPC：前视 + 右腕 + 右臂 joint 有数据；client 环境没有 droid</label>
+    <label><input type="checkbox" data-k="4"/> task config：example_action (1,7)，edit_action_xyzg=False，critic 是右腕，30 Hz</label>
+    <label><input type="checkbox" data-k="5"/> 本机 LeRobot：130 段、7D、两相机；抽 1 段 loader 得到 224 uint8，最后一拍 done=1</label>
+    <label><input type="checkbox" data-k="6"/> H20 已有 norm_stats.json，asset_id 是 screw_sorting_single_sft_ep279_annotated</label>
+    <label><input type="checkbox" data-k="7"/> H20 RTC-SFT：编码器不冻结、bs=64，写出 4000/params</label>
+    <label><input type="checkbox" data-k="7b"/> 本机 test -d params 且 test -f norm_stats.json</label>
+    <label><input type="checkbox" data-k="8"/> 本机 server 先起，client 连上 8103，只有右臂动，键盘 1/2 结束回合</label>
+    <label><input type="checkbox" data-k="9"/> eval_rtc_sft.sh 能滚完；online 之后 eval_policy.sh 用同一 delay</label>
+  </div>
+
+  <h3>故障</h3>
+  <table>
+    <tr><th>现象</th><th>修</th></tr>
+    <tr><td>Q 网络 shape / 黑腕图进 critic</td><td>task <code>critic_camera_keys=("base_0_rgb","right_wrist_0_rgb")</code>；offline_rtc 必须传这个 keys</td></tr>
+    <tr><td><code>Unsupported env_type: cobot</code></td><td>四个入口还没换成 <code>load_task_dataset</code></td></tr>
+    <tr><td>Missing H20 checkpoint</td><td>先做 7b。不要把路径改回 /workspace 或 29999</td></tr>
+    <tr><td>3090 上 RTC OOM</td><td>RTC 不在本机跑。本机只跑 bs=8 的同步 online</td></tr>
+    <tr><td>H20 上 RTC OOM，栈在 <code>init_target_params</code></td><td>不要加载第二份 target。<code>train_offline_rtc.py</code> 已传 <code>init_target=False</code>。不要改 <code>action_horizon</code>，不要换成 LoRA config</td></tr>
+    <tr><td><code>FileExistsError</code> checkpoint 目录已存在</td><td>用脚本里的 <code>--resume</code>。没有 step 就是新训练。删掉空目录再跑，若脚本在检查前又 <code>makedirs</code>，仍会失败</td></tr>
+    <tr><td><code>cobot lerobot</code> 去打开 <code>observation.images.cam_high/*.mp4</code>，或帧数和 parquet 不一致</td><td>图像在 parquet。<code>dtype=image</code>。不要解 <code>videos/chunk-000/cam_high/</code></td></tr>
+    <tr><td>想把训练拉到 30000 步</td><td>改 <code>offline_train.sh</code> 的 <code>--max_steps</code>，并改三份本机脚本的 <code>RTC_PARAMS</code>。改 <code>config.py</code> 的 <code>num_train_steps</code> 不影响 <code>train_offline_rtc.py</code></td></tr>
+    <tr><td>左臂跟着乱动</td><td><code>use_single_arm=True</code>；openpi <code>real_env.py</code> 里 <code>SINGLE_ARM_NAME="right"</code></td></tr>
+    <tr><td>腕关节被 edit 清掉</td><td><code>edit_action_xyzg=False</code></td></tr>
+    <tr><td>夹爪空间错</td><td><code>adapt_to_pi=False</code></td></tr>
+    <tr><td>obs 没做 uint8</td><td>键名必须带 <code>image</code></td></tr>
+    <tr><td>delay 时动作接缝猛</td><td>确认 RTC-SFT 跑过，且部署 delay ≤ 10、≤ replan</td></tr>
+    <tr><td>推理经常掉进同步等待</td><td>150 ms 用 delay=5 够。要盖 200 ms，三份脚本的 delay 一起改成 7 或 8</td></tr>
+    <tr><td>连不上</td><td>client <code>--host</code> 填本机 IP，端口 8103；client 会 5 秒重拨</td></tr>
+    <tr><td>create_env TypeError unexpected kw</td><td>CobotMagicEnv 漏了 <code>**kwargs</code></td></tr>
+    <tr><td>IDE 波浪线 import real_env</td><td>运行时靠 <code>PYTHONPATH=/home/xlk/work/openpi</code>。learner 上 “Not importing cobot env” 正常</td></tr>
+    <tr><td>权重 shape mismatch</td><td>不要改 horizon；不要把 29999 或 RLT / LoRA config 填进 loader</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2><span class="n">★</span>对照 <code>scripts/dynamic_pick/</code></h2>
+  <table>
+    <tr><th>dynamic_pick（DROID）</th><th>本任务</th></tr>
+    <tr><td>openpi 分支 <code>real-time-expo-ft</code></td><td>同分支 @ 2abe462。机器人代码在 <code>/home/xlk/work/openpi</code>，模型 fork 不换成那份仓库</td></tr>
+    <tr><td>LoRA · horizon 16 · 从 pi05_base 做 RTC-SFT</td><td>全量 pi05 · horizon 50 · 同样从 pi05_base 做 RTC-SFT，不先跑 <code>scripts/train.py</code></td></tr>
+    <tr><td>hdf5 采集，转 LeRobot 后进普通 SFT；RTC 脚本原来读 hdf5</td><td>数据已是 LeRobot。<code>cobot_utils.py</code> 读 LeRobot，后面的 prefix 代码不变</td></tr>
+    <tr><td>7D cartesian velocity + 2 ZED，可 SpaceMouse</td><td>7D 右臂绝对关节 + cam_high / 右腕。SpaceMouse 不接</td></tr>
+    <tr><td>抓取检测结束；reset 关节固定，方块位置随机</td><td>键盘 1/2 或 400 步超时；双臂回到 <code>real_env</code> 里写死的近零位</td></tr>
+    <tr><td>port 8103 · delay 5 · replan 8 · 30 Hz</td><td>保持不变</td></tr>
+    <tr><td>offline 编码器不冻结 · bs 64；online 可 async</td><td>RTC 同样不冻结、bs 64，但在 H20。本机 online bs 8、N 8、只同步</td></tr>
+  </table>
+</section>
+
+<section id="sloop">
+  <h2><span class="n">⇄</span>和原来那份全流程手册比，每一步现在能不能闭环</h2>
+  <p class="io">原来的手册是 Step 0–9 加算法、验收、和 dynamic_pick 的对照。删库之后短暂只剩摘要。这一版把那些步骤按当前脚本补全。下表是对照仓库实际跑过的结果，不是勾选框。</p>
+  <table>
+    <tr><th>步骤</th><th>手册要求的闭环</th><th>现在</th></tr>
+    <tr><td>1 GPU</td><td>jax 见到 1 张 CUDA，fork 是 real-time-expo-ft @ 2abe462</td><td>已跑过。<code>.venv</code> 里是 <code>CudaDevice(id=0)</code>，openpi 来自这份 fork，HEAD <code>2abe462</code>。</td></tr>
+    <tr><td>2 TrainConfig</td><td><code>get_config("pi05_cobot_screw_sorting")</code>：单臂 DataConfig，adapt_to_pi=False，horizon 50，loader 指向 pi05_base</td><td>已跑过，四项都是这个结果。</td></tr>
+    <tr><td>3 IPC</td><td>client 环境能 import openpi_client，且没有 droid；上机时 ROS 话题有数</td><td>client 环境已验：<code>msgpack_numpy</code> 能 import，没有 droid。ROS 话题还没在这台机器上测，要到 IPC 上跑 Step 3 的 <code>rostopic</code>。</td></tr>
+    <tr><td>4 代码</td><td>task config 形状 (1, 7)；四处入口走 <code>load_task_dataset</code>；抽 1 段 LeRobot 得到 7D 和 224 图，最后一拍 done=1</td><td>已跑过。task：cobot、(1, 7)、30 Hz、右腕 critic、<code>edit_action_xyzg=False</code>。episode 0：635 步，action (7,)，图 (224, 224, 3) uint8，prompt 带句号，仅最后一拍 done=1、reward=1、mask=0。</td></tr>
+    <tr><td>5 数据</td><td>H20 训练集 <code>screw_sorting_single_sft_ep279_annotated</code>：7D、两相机、<code>dtype=image</code>、279 段、115130 帧</td><td>本机旧目录曾读到 130 段、53231 帧。H20 脚本用的是 279 段那套，图像在 parquet，不在 mp4。</td></tr>
+    <tr><td>6 norm</td><td><code>assets/pi05_cobot_screw_sorting/screw_sorting_single_sft_ep279_annotated/norm_stats.json</code></td><td>H20 训练日志已经从这份 expo-ft assets 读到 norm。<code>DO_STEP3</code> 默认跳过。</td></tr>
+    <tr><td>7 RTC-SFT</td><td>H20 <code>offline_train.sh</code> 写出 <code>4000/params</code></td><td>已在 H20 启动。权重能从 <code>pi05_base</code> 恢复。target 二次加载会 OOM，已关掉。图像必须从 parquet 读。4000/params 还没写出来。</td></tr>
+    <tr><td>7b 下载</td><td><code>test -d</code> params 且 <code>test -f</code> norm_stats</td><td><code>checkpoints/from_h20/</code> 还不存在。三条本机脚本会因此退出。闸门是活的，权重还没回来。</td></tr>
+    <tr><td>8 online</td><td>server 先起，client 连上，右臂动，键盘结束回合，梯度开始</td><td>脚本在。依赖 7b，真机还没跑。没有 <code>--checkpoint_buffer</code>，在线 buffer 不跨重启。</td></tr>
+    <tr><td>9 评测</td><td>先 <code>eval_rtc_sft.sh</code>，再 <code>eval_policy.sh</code>，delay 都是 5</td><td>两个脚本都在，入口仍是 <code>eval_droid_policy.py</code>，机器人由 <code>run_policy.sh</code> 创建。依赖 7b，还没上机。</td></tr>
+    <tr><td>算法 / 情节 / 几个 8</td><td>公式、数例、Cobot 复位角、和作者 DROID 的差别写在手册里</td><td>在「算法」一节。代码侧 <code>control_hz</code>、delay、replan、N、edit_scale 与脚本一致。真机是否按这个环跑，要等 Step 8。</td></tr>
+  </table>
+  <div class="note">
+    Step 1–5 在这台机器上已经能自己验完。H20 上 Step 6 的 norm 已在仓库里，Step 7 已经启动但还没有 <code>4000/params</code>。下载和真机还没发生。
+  </div>
+</section>
+
+<footer>
+  文件：<code>/home/xlk/work/expo-ft/docs/cobot_magic_expo_ft.html</code>
+  · v4 · 2026-09-26 · H20 RTC-SFT：4000 步、parquet 图像、不加载 target。Step 7 已开训，4000/params 未写出
+</footer>
+</div>
+<script>
+function cp(b){const t=b.parentElement.querySelector("code").innerText;navigator.clipboard.writeText(t).then(()=>{b.textContent="已复制";setTimeout(()=>b.textContent="复制",1100)})}
+const KEY="rt-expo-cobot-screw-v4",box=document.getElementById("checks"),bar=document.getElementById("bar");
+const saved=JSON.parse(localStorage.getItem(KEY)||"{}");
+function refresh(){const ins=[...box.querySelectorAll("input")];let n=0;ins.forEach(i=>{const l=i.closest("label");if(i.checked){n++;l.classList.add("done")}else l.classList.remove("done")});bar.style.width=(100*n/ins.length)+"%"}
+box.querySelectorAll("input").forEach(i=>{i.checked=!!saved[i.dataset.k];i.addEventListener("change",()=>{const st={};box.querySelectorAll("input").forEach(x=>st[x.dataset.k]=x.checked);localStorage.setItem(KEY,JSON.stringify(st));refresh()})});
+refresh();
+const secs=[...document.querySelectorAll("section[id]")],links=[...document.querySelectorAll("#rail a")];
+const io=new IntersectionObserver(es=>es.forEach(e=>{if(e.isIntersecting)links.forEach(a=>a.classList.toggle("on",a.getAttribute("href")==="#"+e.target.id))}),{rootMargin:"-40% 0px -50% 0px"});
+secs.forEach(s=>io.observe(s));
+</script>
+</body>
+</html>

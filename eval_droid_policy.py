@@ -17,7 +17,7 @@ from ml_collections import config_flags
 from expo_ft.agents import initialize_checkpoint_dir
 from expo_ft.data.replay_buffer import create_replay_buffer, _critic_key_to_storage
 from expo_ft.env.env_client import EnvClientWrapper
-from expo_ft.env.droid_utils import process_droid_dataset
+from expo_ft.env.task_dataset import load_task_dataset
 
 import openpi.training.sharding as openpi_sharding
 
@@ -66,11 +66,6 @@ def main(_):
     )
     logger = logging.getLogger(__name__)
 
-    if config_task.env_type != "droid":
-        raise ValueError(
-            "This script is for DROID evaluation only; config_task.env_type must be 'droid'."
-        )
-
     if not FLAGS.dataset_path:
         raise ValueError("--dataset_path is required.")
 
@@ -100,11 +95,7 @@ def main(_):
 
     example_action = config_task.example_action
     # Dataset only for agent observation/action shapes (run one sample through transform)
-    dataset = process_droid_dataset(
-        FLAGS.dataset_path,
-        config_task,
-        num_data=FLAGS.num_data,
-    )
+    dataset = load_task_dataset(FLAGS.dataset_path, config_task, FLAGS.num_data)
 
     task_description = config_task.language_instruction
     max_traj_len = config_task.auto_reset_steps

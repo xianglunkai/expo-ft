@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Real-Time EXPO-FT 在 Cobot Magic 单臂螺丝分拣上的实现分析</title>
+<style>
+  :root {
+    --ink:#1a1a1a; --muted:#444; --rule:#1a1a1a; --hair:#c8c8c8; --paper:#f7f5f0; --sheet:#fff;
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--paper); color:var(--ink);
+    font-family:"Noto Serif SC","Source Han Serif SC","Songti SC",SimSun,serif;
+    font-size:16px; line-height:1.85;
+  }
+  .sheet{max-width:820px; margin:28px auto 64px; background:var(--sheet); padding:56px 64px 72px;
+    border:1px solid #e4e0d8;}
+  .kicker{text-align:center; font-family:"Noto Sans SC","Source Han Sans SC",sans-serif;
+    font-size:13px; letter-spacing:.22em; color:var(--muted); margin:0 0 18px;}
+  h1{font-family:"Noto Sans SC","Source Han Sans SC",sans-serif; font-weight:700;
+    font-size:24px; line-height:1.45; text-align:center; margin:0 0 10px;}
+  .sub{text-align:center; font-size:15px; color:var(--muted); margin:0 0 22px;}
+  .meta{text-align:center; font-size:13px; color:var(--muted); margin:0 0 28px;}
+  h2{font-family:"Noto Sans SC","Source Han Sans SC",sans-serif; font-size:18px; font-weight:700;
+    margin:32px 0 10px; padding-top:8px;}
+  h3{font-family:"Noto Sans SC","Source Han Sans SC",sans-serif; font-size:16px; font-weight:650;
+    margin:22px 0 8px;}
+  p{margin:0 0 12px; text-align:justify;}
+  a{color:#1a1a1a;}
+  .abs{margin:8px 0 22px; padding:14px 0; border-top:1px solid var(--rule); border-bottom:1px solid var(--rule);}
+  .abs p{text-indent:2em;}
+  .abs .lab{font-family:"Noto Sans SC",sans-serif; font-weight:700; margin-right:.35em;}
+  .kw{font-size:15px; margin:0;}
+  .kw .lab{font-family:"Noto Sans SC",sans-serif; font-weight:700;}
+  code{font-family:"Source Code Pro","Noto Sans SC",ui-monospace,monospace; font-size:.86em;}
+  .eq{display:grid; grid-template-columns:1.6em 1fr 1.6em; align-items:center;
+    margin:12px 0 14px; font-size:15.5px;}
+  .eq .body{text-align:center; overflow-x:auto; padding:2px 8px;}
+  .eq .no{text-align:right; font-size:14px;}
+  .eq .stack{display:block; line-height:1.55;}
+  figure{margin:16px 0 18px;}
+  figcaption, .cap{font-size:14px; text-align:center; color:#222; margin:8px 0;}
+  figcaption{margin-top:8px;}
+  table{width:100%; border-collapse:collapse; font-size:14.5px; margin:4px 0 6px;}
+  caption{caption-side:top; text-align:center; font-weight:650; font-family:"Noto Sans SC",sans-serif;
+    font-size:14.5px; margin-bottom:6px; color:#222;}
+  th,td{padding:6px 8px; text-align:left; vertical-align:top; border:none;}
+  thead th{border-top:1.5px solid var(--rule); border-bottom:1px solid var(--rule); font-weight:650;
+    font-family:"Noto Sans SC",sans-serif;}
+  tbody tr:last-child td{border-bottom:1.5px solid var(--rule);}
+  ol.refs{padding-left:1.6em; margin:0;}
+  ol.refs li{margin:0 0 8px; text-align:justify; font-size:14.5px;}
+  .fn{font-size:13px; color:var(--muted); border-top:1px solid var(--hair); margin-top:28px; padding-top:10px;}
+  nav{font-family:"Noto Sans SC",sans-serif; font-size:13px; color:var(--muted); margin:0 0 8px;}
+  nav a{color:var(--muted); text-decoration:none; margin-right:10px;}
+  nav a:hover{text-decoration:underline;}
+  @media print{
+    body{background:#fff;}
+    .sheet{border:none; margin:0; max-width:none; padding:0;}
+    nav{display:none;}
+  }
+  @media(max-width:720px){
+    .sheet{margin:0; padding:28px 18px 48px;}
+  }
+</style>
+</head>
+<body>
+<article class="sheet">
+
+<p class="kicker">技术报告</p>
+<h1>Real-Time EXPO-FT 在 Cobot Magic 单臂螺丝分拣上的实现分析</h1>
+<p class="sub">流程、网络、训练目标、推理控制与局限性</p>
+<p class="meta">依据仓库 <code>expo-ft</code> 中 <code>RealTimeEXPOFTLearner</code>、<code>RTCLearner</code> 与 <code>scripts/cobot_screw_sorting/</code> 整理<br/>操作步骤另见 <a href="cobot_magic_expo_ft.html">逐步实施手册</a></p>
+
+<nav>
+  <a href="#s1">1 引言</a>
+  <a href="#s2">2 问题设定</a>
+  <a href="#s3">3 方法</a>
+  <a href="#s4">4 实验设计</a>
+  <a href="#s5">5 局限性</a>
+  <a href="#s6">6 结论</a>
+  <a href="#refs">参考文献</a>
+</nav>
+
+<div class="abs">
+  <p><span class="lab">摘　要</span>本文将 Real-Time EXPO-FT<sup>[1]</sup> 落到 Cobot Magic 单臂螺丝分拣上，并按当前代码给出可对照的数学形式。策略以 π<sub>0.5</sub> 的 flow matching 动作块为基座，先用训练时动作前缀条件<sup>[3]</sup>做 RTC-SFT，再在真机上用集成 Q 与小残差策略对执行窗做样本筛选<sup>[2]</sup>。控制频率 30 Hz，推理延迟按 5 个控制步隐藏在 8 步执行窗之内。本文给出网络分工、数据表示、三项在线损失、控制时序，以及尚未进行的评估应当如何拆开。真机成功率尚未测量。分析表明：稀疏的键盘回报与 8 步时域不匹配，生成所用观测与打分所用观测相差一个延迟，过滤器的回归目标也不是最终执行的动作。</p>
+  <p class="kw"><span class="lab">关键词</span>视觉–语言–动作模型；实时动作块；flow matching；在线强化学习；螺丝分拣</p>
+</div>
+
+<h2 id="s1">1　引言</h2>
+<p>右臂需要以约 33 ms 的间隔接收 7 维绝对关节指令，而 π<sub>0.5</sub> 一次去噪大约需要 150–200 ms。若每次都在规划边界上等待采样结束，手臂会周期性地停顿。Real-Time EXPO-FT 把这个问题分成两层。第一层沿用实时动作块：下一段在当前段尚未执行完时开始计算，并把已经发出的动作作为前缀钉住，使两段在接缝处连续<sup>[1,3]</sup>。第二层沿用 EXPO-FT：在若干条基座窗上叠加一个小残差，再用 Q 函数在基座与修正后的候选之间选择<sup>[2]</sup>。</p>
+<p>作者在 DROID 上的流程与本文的机器人层不同，算法层保持同一套学习器。本文不重复环境安装与脚本参数，只记录与代码一致的定义、损失和控制时序，并讨论这些选择在螺丝分拣上的后果。文中所有旗标以 <code>scripts/cobot_screw_sorting/</code> 的覆盖值为准。配置文件中的 <code>edit_scale</code> 默认是 0.2，在线脚本将其设为 0.1。</p>
+
+<h2 id="s2">2　问题设定</h2>
+<p>记控制步为 <em>t</em>，环境动作为右臂 7 维绝对关节 <em>a</em><sup>env</sup><sub><em>t</em></sub>。左臂在单臂模式下保持复位姿态，不进入动作向量。观测 <em>o</em><sub><em>t</em></sub> 含前视与右腕图像、7 维本体状态，以及固定的语言指令。策略不直接输出下一步，而输出长度 <em>H</em>=50 的动作块。块在网络内部是 32 维，前 7 维对应右臂，其余为填充。</p>
+<div class="eq"><span></span><div class="body"><em>A</em><sub><em>t</em></sub> = [<em>a</em><sub><em>t</em></sub>, …, <em>a</em><sub><em>t</em>+<em>H</em>−1</sub>] ∈ ℝ<sup><em>H</em>×32</sup></div><span class="no">(1)</span></div>
+<p>手臂只执行其中的一个窗。执行窗长度 <em>r</em>=8，推理延迟 <em>d</em>=5，二者都以控制步计，且要求 <em>d</em>≤<em>r</em> 与 <em>H</em>≥2<em>r</em>。折扣因子 γ=0.99。回合奖励在中间步为 0；操作者在 IPC 终端输入 1 时该步奖励为 1 并结束，输入 2 或步数达到 400（约 13 s）时该步奖励为 0 并结束。结束步的 bootstrap 掩码为 0。</p>
+<p class="cap">表 1　本文使用的符号与脚本取值</p>
+<table>
+  <thead><tr><th>符号</th><th>含义</th><th>取值</th></tr></thead>
+  <tbody>
+    <tr><td><em>H</em>, <em>D</em></td><td>动作块长度与填充后的动作维</td><td>50, 32</td></tr>
+    <tr><td><em>r</em></td><td>执行窗 <code>replan_steps</code></td><td>8，展平后 56 维</td></tr>
+    <tr><td><em>d</em></td><td>部署延迟 <code>delay</code>；离线训练上界 <code>p1_max_delay</code></td><td>部署 5；训练上界 10</td></tr>
+    <tr><td><em>N</em>, <em>n</em><sub>edit</sub></td><td>部署时的基座条数与每条上的残差条数</td><td>均为 8</td></tr>
+    <tr><td><em>N</em><sub><em>f</em></sub></td><td>训练 backup 的噪声种子数 <code>filter_N</code></td><td>8，温度 0</td></tr>
+    <tr><td><em>s</em></td><td>残差系数 <code>edit_scale</code></td><td>脚本为 0.1</td></tr>
+  </tbody>
+</table>
+
+<h2 id="s3">3　方法</h2>
+<h3>3.1　总体流程</h3>
+<p>在线学习的核心是不把 π<sub>0.5</sub> 当作接受强化学习梯度的策略。去噪一次就要约 150–200 ms，也不适合在每个时序差分备份里重复 <em>N</em> 次。因此 π<sub>0.5</sub> 只作为提案分布：执行时用集成 Q 在它抽出的窗里选择，训练时用 Q<sub><em>f</em></sub> 在去噪之前给噪声种子打分，只把得分最高的种子拿去去噪。小的 edit 在这条基座上加残差，使动作不必落在 π<sub>0.5</sub> 抽到的有限几条上。π<sub>0.5</sub> 自身继续做前缀行为克隆，在线阶段视觉编码器冻结。</p>
+<p>学习分成离线前缀微调与在线样本筛选。离线阶段只更新 π<sub>0.5</sub>，权重从 <code>pi05_base</code> 开始，视觉编码器参与梯度，批量大小 64，共 4000 步，每 2000 步保存一次。在线阶段载入该检查点，冻结 π<sub>0.5</sub> 的视觉编码器，新建 critic、过滤器和 edit 策略，并在真机回合上更新。演示整份进入同一个回放缓冲区并标为成功；critic 从全部转移中抽样，基座与 edit 只从成功转移中抽样。</p>
+<figure>
+  <p style="text-align:center; line-height:1.7; margin:0;">
+    LeRobot 演示<br/>↓<br/>
+    RTC-SFT：<em>d</em>∼Unif{0,…,10}，只监督 postfix<br/>↓<br/>
+    载入 4000 步权重与同一套归一化统计量<br/>↓<br/>
+    每 33 ms：队列剩 <em>d</em> 步时后台去噪 <em>N</em> 条块<br/>↓<br/>
+    边界上用当前观测对 16 条候选取 Q，执行 8 步<br/>↓<br/>
+    回合结束时按约每 30 拍一次的额度做梯度
+  </p>
+  <figcaption>图 1　从离线前缀微调到在线控制的数据流。慢相位与快相位的定义见第 3.7 节。</figcaption>
+</figure>
+
+<h3>3.2　网络结构</h3>
+<p>系统里有两套视觉编码器，没有把它们绑在同一个损失上。基座是 OpenPI 的 <code>Pi0Config(pi05=True)</code>：视觉语言主干加 action expert，用条件 flow matching 生成动作块<sup>[4]</sup>。关节在模型内部变为增量，夹爪保持绝对量，增量掩码为 (6,−1)，<code>adapt_to_pi=False</code>。离线时编码器可训练；在线时 <code>freeze_pi05_encoder=True</code>，前缀行为克隆只更新仍处于可训练集合中的参数。</p>
+<p>Critic 的视觉塔是 <code>ResNetV2Encoder</code>，阶段配置 (3,4,6,3)，每级 64 个滤波器，图像隐变量维数 512。两路相机沿通道拼接，键为 <code>base_0_rgb</code> 与 <code>right_wrist_0_rgb</code>。本体状态另有 64 维隐变量。该编码器在线默认可训练。Q 由 10 个带层归一化的多层感知机组成，隐层为 (256,256,256)，输入是图像隐变量、本体和展平的 56 维执行窗。打分时从 10 个成员中抽 2 个取最小。目标网络的 Polyak 系数为 τ=0.005。</p>
+<p>过滤器 Q<sub><em>f</em></sub> 只有 2 个同样结构的网络。它的动作输入不是 56 维窗，而是去噪前的整段噪声，形状 (50,32)，展平为 1600 维。edit 策略是条件于图像隐变量、本体和当前基座窗的 tanh 高斯，输出 56 维残差，网络同为三层 256。<code>edit_action_xyzg=False</code>，因此七个分量都保留；若将该开关打开，第 3 至 5 维会被当作旋转清零，而在关节空间里它们是腕关节。</p>
+<p class="cap">表 2　四个模块的输入与训练状态</p>
+<table>
+  <thead><tr><th>模块</th><th>输入</th><th>输出</th><th>在线是否更新</th></tr></thead>
+  <tbody>
+    <tr><td>π<sub>0.5</sub></td><td>图像、语言、状态、带前缀的噪声块</td><td>(50,32) 速度场</td><td>视觉塔冻结；前缀行为克隆继续</td></tr>
+    <tr><td>ResNet + Q</td><td>两路相机、本体、56 维窗</td><td>10 个标量</td><td>是</td></tr>
+    <tr><td>Q<sub><em>f</em></sub></td><td>当前与延迟观测的拼接、1600 维噪声</td><td>2 个标量</td><td>是</td></tr>
+    <tr><td>edit</td><td>图像隐变量、本体、基座窗</td><td>(−1,1)<sup>56</sup> 的残差</td><td>是，且只在成功样本上</td></tr>
+  </tbody>
+</table>
+
+<h3>3.3　数据表示</h3>
+<p>演示为 LeRobot v2.1，本机目录含 130 段、53231 帧，帧率 30 Hz，机器人类型为 <code>agilex_cobot</code>。状态与动作均为 7 维，图像为 <code>cam_high</code> 与 <code>cam_right_wrist</code>，原始分辨率 480×640。读入时缩放到 224×224 的 uint8，再经过重打包、关节增量与归一化，成为回放缓冲区中的转移。缓冲区位于内存，脚本未开启落盘。回合中的真机步在回合结束时插入，成功标记来自键盘。</p>
+<p>H20 上的默认数据目录名是 <code>screw_sorting</code>，本机默认是 <code>screw_sorting_single_sft</code>。归一化统计量必须与计算它的那一份数据一致。语言指令取自数据集中的任务字段，句末带句号。</p>
+
+<h3>3.4　RTC-SFT</h3>
+<p>离线目标实现于 <code>train_step_p1_prefix</code>，对应训练时动作前缀条件<sup>[3]</sup>。每个样本有干净块 <em>a</em> 与观测 <em>o</em>。前缀长度在离线时随机抽取；在线继续做前缀行为克隆时，由回合进度指定：</p>
+<div class="eq"><span></span><div class="body"><span class="stack">
+  离线：<em>d</em> ∼ Unif{0,…,10}<br/>
+  在线：<em>d</em> = 0，若回合步 &lt; <em>r</em>；否则 <em>d</em> = 5
+</span></div><span class="no">(2)</span></div>
+<p>时间系数与插值沿用 π<sub>0.5</sub> 的 flow matching，但前缀位置的时间被置零，因而那些位置保持干净动作，并且不进入损失。记 <em>m</em><sub><em>h</em></sub>=1[<em>h</em>≥<em>d</em>]，ε∼𝒩(0,<em>I</em>)，</p>
+<div class="eq"><span></span><div class="body"><span class="stack">
+  τ<sub><em>b</em></sub> ∼ 0.001 + 0.999·Beta(1.5, 1)<br/>
+  τ<sub><em>h</em></sub> = τ<sub><em>b</em></sub> <em>m</em><sub><em>h</em></sub>,　
+  <em>x</em><sub><em>h</em></sub> = τ<sub><em>h</em></sub> ε<sub><em>h</em></sub> + (1−τ<sub><em>h</em></sub>) <em>a</em><sub><em>h</em></sub>,　
+  <em>u</em><sub><em>h</em></sub> = ε<sub><em>h</em></sub> − <em>a</em><sub><em>h</em></sub>
+</span></div><span class="no">(3)</span></div>
+<div class="eq"><span></span><div class="body">ℒ<sub>RTC</sub> = Σ<sub><em>b,h</em></sub> <em>m</em><sub><em>b,h</em></sub> mean<sub><em>D</em></sub>(<em>v</em><sub>θ</sub>−<em>u</em>)<sup>2</sup>　/　Σ<sub><em>b,h</em></sub> <em>m</em><sub><em>b,h</em></sub></div><span class="no">(4)</span></div>
+<p>分母按掩码归一，避免前缀较长的样本因为监督步数少而在批平均中被缩小。<em>d</em>=0 时式 (4) 退化为普通的 flow-matching 行为克隆。推理时 <code>sample_actions_with_prefix</code> 在整个积分过程中把前缀钉在干净动作上，只积分后缀。离线训练把 <em>d</em> 均匀放在 0 到 10，部署在第一段之后却几乎总是 5。在线阶段将 <em>d</em> 固定为部署值，用来缩小这一差别。</p>
+
+<h3>3.5　执行窗的选择</h3>
+<p>慢相位在观测 <em>o</em><sub><em>t</em>−<em>d</em></sub> 上、带着已执行前缀，采样 <em>N</em>=8 条归一化块。快相位切出执行窗，仍在归一化空间中：</p>
+<div class="eq"><span></span><div class="body"><em>w</em><sub><em>i</em></sub> = chunk<sub><em>i</em></sub>[<em>d</em> : <em>d</em>+<em>r</em>] ∈ ℝ<sup>8×7</sup>,　<em>i</em>=1,…,8</div><span class="no">(5)</span></div>
+<div class="eq"><span></span><div class="body">ρ<sub><em>i</em></sub> ∼ π<sub>edit</sub>(· | enc(<em>o</em><sub><em>t</em></sub>), <em>s</em><sub><em>t</em></sub>, <em>w</em><sub><em>i</em></sub>),　ã<sub><em>i</em></sub> = <em>w</em><sub><em>i</em></sub> + 0.1 ρ<sub><em>i</em></sub></div><span class="no">(6)</span></div>
+<p>候选集合为 {<em>w</em><sub>1</sub>,…,<em>w</em><sub>8</sub>, ã<sub>1</sub>,…,ã<sub>8</sub>}。从 10 个目标 Q 中抽取 <em>J</em>、|<em>J</em>|=2，再取最大：</p>
+<div class="eq"><span></span><div class="body"><span class="stack">
+  Q̄(<em>o</em><sub><em>t</em></sub>, <em>C</em><sub><em>k</em></sub>) = min<sub><em>j</em>∈<em>J</em></sub> <em>Q</em><sub><em>j</em></sub>(enc(<em>o</em><sub><em>t</em></sub>), <em>C</em><sub><em>k</em></sub>, <em>s</em><sub><em>t</em></sub>)<br/>
+  <em>k</em>* = argmax<sub><em>k</em></sub> Q̄(<em>o</em><sub><em>t</em></sub>, <em>C</em><sub><em>k</em></sub>)
+</span></div><span class="no">(7)</span></div>
+<p>胜出的 8 步反归一化后发给右臂，其中最后 5 步成为下一次的前缀。第一段没有前缀，慢相位同步完成，窗取块的前 8 步。系数 0.1 作用在归一化坐标上，对应的关节变化取决于该维的统计量，不是 0.1 rad。</p>
+<p>表 3 用一个缩减候选集说明选择规则。数值是归一化窗中的一个分量，不是关节角。实现中的候选数是 8+8。</p>
+<p class="cap">表 3　归一化空间中的选择示例</p>
+<table>
+  <thead><tr><th>候选</th><th>分量</th><th>Q̄</th></tr></thead>
+  <tbody>
+    <tr><td><em>w</em><sub>1</sub></td><td>0.40</td><td>1.2</td></tr>
+    <tr><td><em>w</em><sub>2</sub></td><td>0.55</td><td>0.4</td></tr>
+    <tr><td>ã<sub>1</sub> = 0.40 + 0.1×0.20</td><td>0.42</td><td>1.5</td></tr>
+    <tr><td>ã<sub>2</sub> = 0.55 + 0.1×(−0.30)</td><td>0.52</td><td>0.9</td></tr>
+  </tbody>
+</table>
+<p>按式 (7) 执行 ã<sub>1</sub>。相对基座，该分量移动 0.02 个归一化单位。</p>
+<figure>
+  <div style="display:grid; grid-template-columns:1fr 1fr; gap:28px; font-size:14.5px; line-height:1.65;">
+    <p style="text-align:center; margin:0;">
+      <strong>执行</strong><br/>
+      观测 <em>o</em><sub><em>t</em>−<em>d</em></sub> 与已执行前缀 <em>p</em><br/>↓<br/>
+      π<sub>θ</sub> 采样 <em>N</em> 条动作块<br/>↓<br/>
+      切出执行窗 <em>w</em><sub><em>i</em></sub><br/>↓<br/>
+      当前观测 <em>o</em><sub><em>t</em></sub> 上加残差 <em>s</em>ρ<br/>↓<br/>
+      候选集 = 基座窗 ∪ 残差窗<br/>↓<br/>
+      集成 Q：先取最小，再 argmax<br/>↓<br/>
+      执行 <em>r</em> 拍，末 <em>d</em> 拍成为下一次前缀
+    </p>
+    <p style="text-align:center; margin:0;">
+      <strong>训练备份</strong><br/>
+      回放中的转移<br/>↓<br/>
+      抽 <em>N</em><sub><em>f</em></sub> 个噪声种子<br/>↓<br/>
+      Q<sub><em>f</em></sub> 选出 ε*<br/>↓<br/>
+      只去噪这一条，得到 <em>w</em><br/>↓<br/>
+      再采 1 条残差 ã<br/>↓<br/>
+      <em>a</em>* = <em>w</em> 与 ã 中 Q 更高者<br/>↓<br/>
+      ℒ<sub><em>Q</em></sub> 的目标用 <em>a</em>*；ℒ<sub><em>f</em></sub> 去拟合 Q(<em>w</em>)<br/>
+      ℒ<sub>edit</sub> 在缓冲动作上最大化 Q<br/>
+      ℒ<sub>VLA</sub> 只在成功样本上做前缀 BC
+    </p>
+  </div>
+  <figcaption>图 2　执行与训练备份。部署去噪 <em>N</em> 条并在每条上加残差；训练把去噪收成 1 次，残差收成 1 条。两条路径都把 π<sub>0.5</sub> 留在提案分布里。</figcaption>
+</figure>
+
+<h3>3.6　在线目标</h3>
+<p>部署会去噪 8 条块。训练时的 backup 只去噪 1 条。先抽取 8 个噪声种子，由 Q<sub><em>f</em></sub> 在温度为 0 时取最大。Q<sub><em>f</em></sub> 的条件是下一状态编码与延迟前观测编码的拼接。被保留的种子在延迟前的观测上、带着已执行前缀完成去噪，再切出基座窗 <em>w</em>。训练时只在这条基座上再采样 1 条残差 ã，尽管部署时每条基座有 8 条残差。时序差分使用二者中 Q 较高的动作 <em>a</em>*。</p>
+<div class="eq"><span></span><div class="body"><span class="stack">
+  ε* = argmax<sub><em>n</em></sub> <em>Q</em><sub><em>f</em></sub>(<em>o</em>′, <em>o</em><sub><em>t</em>−<em>d</em></sub>, ε<sub><em>n</em></sub>)<br/>
+  <em>w</em> = Denoise(π<sub>θ</sub>, ε*, <em>o</em><sub><em>t</em>−<em>d</em></sub>, <em>p</em>)，再切执行窗<br/>
+  ã = <em>w</em> + 0.1 ρ,　ρ ∼ π<sub>edit</sub><br/>
+  <em>a</em>* = argmax<sub><em>a</em> ∈ {<em>w</em>, ã}</sub> Q̄(<em>o</em>′, <em>a</em>)
+</span></div><span class="no">(8)</span></div>
+<div class="eq"><span></span><div class="body">ℒ<sub><em>f</em></sub> = mean ( <em>Q</em><sub><em>f</em></sub>(<em>o</em>′, ε*) − stopgrad(Q̄(<em>o</em>′, <em>w</em>)) )<sup>2</sup></div><span class="no">(9)</span></div>
+<p>式 (9) 的目标是基座 <em>w</em> 的 Q，即候选下标 0，不是 <em>a</em>* 的 Q。回放中的奖励已经是该 8 步窗的折扣和。中间奖励为 0 时，只有窗内出现成功或失败，<em>R</em> 才非零：</p>
+<div class="eq"><span></span><div class="body"><span class="stack">
+  <em>R</em> = Σ<sub><em>i</em>=0</sub><sup>7</sup> γ<sup><em>i</em></sup> <em>r</em><sub><em>t</em>+<em>i</em></sub><br/>
+  <em>y</em> = <em>R</em> + γ<sup>8</sup> · mask · min<sub><em>j</em>∈<em>J</em></sub> <em>Q</em>′<sub><em>j</em></sub>(<em>o</em>′, <em>a</em>*)<br/>
+  ℒ<sub><em>Q</em></sub> = mean( valids · (<em>Q</em>(<em>o</em>, <em>a</em><sub>buf</sub>) − <em>y</em>)<sup>2</sup> )
+</span></div><span class="no">(10)</span></div>
+<p>γ<sup>8</sup>≈0.9227。超时截断的窗 valids=0。窗未走满但属于回合自然结束的样本，因 <code>valids_keep_terminal_windows=True</code> 仍然保留。若成功落在窗的第 8 步，则 <em>R</em>=γ<sup>7</sup>≈0.932，mask=0，<em>y</em> 不再包含下一 Q。</p>
+<p>edit 只在成功样本上、相对缓冲区中的基座动作更新。缩放残差改变了密度，对数概率需减去雅可比。56 是执行窗维数，56·log(0.1)≈−128.9：</p>
+<div class="eq"><span></span><div class="body"><span class="stack">
+  log π<sub>scaled</sub>(<em>a</em>) = log π<sub>edit</sub>(ρ) − 56·log(0.1)<br/>
+  ℒ<sub>edit</sub> = mean( α · log π<sub>scaled</sub> − <em>Q</em>(<em>o</em>, <em>a</em>) )
+</span></div><span class="no">(11)</span></div>
+<p>温度 α 的目标熵为 −56/2=−28，不把 log(<em>s</em>) 再计入目标熵。初始温度为 0.01。π<sub>0.5</sub> 另行优化式 (4)，在线时 <em>d</em> 由式 (2) 的第二行给出。</p>
+
+<h3>3.7　控制时序</h3>
+<p><code>AsyncChunkSampler</code> 在队列长度恰好等于 <em>d</em> 时，把慢相位放入后台线程，手臂继续执行剩余的 5 步。边界到达后运行快相位。快相位是编码、残差采样与 Q 选择，计算量应远小于去噪。以 30 Hz 计，8 步约 267 ms，提前 5 步开始推理，重叠预算约 167 ms。</p>
+<p class="cap">表 4　一个执行窗内的时序</p>
+<table>
+  <thead><tr><th>时刻</th><th>事件</th></tr></thead>
+  <tbody>
+    <tr><td>0 ms</td><td>开始执行新的 8 步，前缀已包含在其中。</td></tr>
+    <tr><td>约 100 ms</td><td>剩余 5 步。后台以当前观测和这 8 步末尾的 5 步为前缀开始去噪。</td></tr>
+    <tr><td>100–267 ms</td><td>手臂走完剩余 5 步。去噪若在约 150 ms 内结束，边界上几乎无需等待。</td></tr>
+    <tr><td>约 267 ms</td><td>用边界时刻的新观测对 16 条候选打分，发出下一组 8 步。</td></tr>
+  </tbody>
+</table>
+<p>第一段没有前缀，必须同步算完再动。若边界上后台尚未结束，实现会改为同步等待，手臂停在该边界。这一重叠与把采样和梯度分到不同 GPU 的异步训练不是同一机制；本机单卡不使用后者。</p>
+
+<h2 id="s4">4　实验设计</h2>
+<p>截至本文整理时，尚未获得真机成功率，也没有留出集上的前缀损失。下列四项测量不同的失败，不宜合并成一个数。比较时延迟、执行窗、复位姿态、超时步数和语言指令必须相同。训练过程中的成功率与停梯度的评测也应分开，因为训练时策略在变化，失败样本会进入 critic。</p>
+<p class="cap">表 5　建议分开报告的四项测量</p>
+<table>
+  <thead><tr><th>实验</th><th>固定条件</th><th>观测指标</th></tr></thead>
+  <tbody>
+    <tr><td>留出前缀损失</td><td>RTC 权重，<em>d</em> 固定为 5，不更新</td><td>式 (4) 在 postfix 上的值。它只说明前缀条件是否学到。</td></tr>
+    <tr><td>开环窗误差</td><td>同一权重，在留出演示上做前缀采样</td><td>反归一化后 8 步相对演示的关节误差与夹爪误差。</td></tr>
+    <tr><td>真机仅 RTC</td><td><code>eval_rtc_sft.sh</code>，无 Q 与 edit</td><td>键盘成功比例、超时比例、复位到首次夹取的时间。</td></tr>
+    <tr><td>真机在线策略</td><td><code>eval_policy.sh</code>，同一延迟</td><td>同上，并记录 Q 选中残差而非基座的比例。</td></tr>
+  </tbody>
+</table>
+<p>还需要一组延迟为 0 的同步重规划作为对照。若 <em>d</em>=5 明显差于 <em>d</em>=0，问题在接缝或推理超时。若两者都差且开环误差也大，问题在 RTC-SFT 或数据，尚未进入 Q 的讨论。</p>
+
+<h2 id="s5">5　局限性</h2>
+<h3>5.1　回报稀疏，且与备份时域不一致</h3>
+<p>成功信号至多约每 13 s 出现一次，而式 (10) 的视野只有 8 个控制步，约 267 ms。非零的 <em>R</em> 只写入包含该拍的窗口，更早的窗口只能通过 γ<sup>8</sup><em>Q</em>′ 传递价值。演示有 130 段，在线早期的成功更少。与此同时，400 步超时会把尚未完成的分拣写成失败。若该上限短于实际节拍，缓冲区中会出现系统性的假阴性，Q 会压低仍在进行中的状态。</p>
+<h3>5.2　成功由键盘定义</h3>
+<p>作者的抓取任务可以用夹爪高度等信号自动结束回合。本文的成功完全取决于操作者何时按下确认。按晚则奖励落在松手或回退的窗口上，按早则掩码截断后续放置。不同操作者的标准会进入同一个 Q。这是回报函数的定义，不是标注流程中的偶发噪声。</p>
+<h3>5.3　生成与打分使用不同时刻的观测</h3>
+<p>八条基座在 <em>o</em><sub><em>t</em>−<em>d</em></sub> 上去噪，前缀也来自已经发出的指令。式 (7) 却在边界用 <em>o</em><sub><em>t</em></sub> 打分。约 167 ms 内若螺丝被碰动，基座描述的是过时场景。残差又被限制在归一化空间的小邻域内，Q 只能在这 16 条里挑选，不能按新图像重新采样。</p>
+<h3>5.4　过滤器的目标不是被执行的动作</h3>
+<p>式 (9) 回归到基座 <em>w</em> 的 Q，而时序差分和部署都可能选中残差。过滤器因此学习哪一个噪声会变成高 Q 的基座，而不是哪一个噪声在加上残差后会被选中。温度为 0 时，8 个种子上的 argmax 还带来选最大值的乐观偏差。过滤器集成只有 2 个，也不再做主 Q 那种子集取最小。</p>
+<h3>5.5　动作缩放与熵项的尺度</h3>
+<p>式 (11) 中的雅可比修正约为 −128.9，而稀疏奖励下的 Q 在 0 到 1 附近。温度必须以很小的数值把这一常数压住，否则熵项主导残差；若温度被目标熵拉高，残差又会为了熵而偏离 Q。脚本将系数从配置默认的 0.2 改为 0.1，初始温度仍为 0.01，二者并不自动匹配。把系数写成 0 在对数概率中没有定义，也不能据此得到纯基座策略。纯基座对应的是评测时不构建 edit。</p>
+<h3>5.6　候选集合窄，且训练与部署的条数不同</h3>
+<p>执行窗位于 ℝ<sup>56</sup>。部署只看见 8 条 flow 样本及其残差，Q 的梯度集中在这个邻域。基座若整段抓错，0.1 倍的 tanh 残差移动有限。训练 backup 把 8 次去噪收成 1 次，并把每条基座上的残差从 8 条减为 1 条，因此时序差分见到的动作分布窄于部署。</p>
+<h3>5.7　视觉表示在线不适应场景变化</h3>
+<p>在线冻结 π<sub>0.5</sub> 的视觉塔，只在成功样本上继续做前缀行为克隆。螺丝位置、光照或盒沿若与 130 段演示不同，误差留在冻结表示里。Critic 的 ResNet 可以适应新图像，但它只能重排和轻推已经采样出的窗。两套视觉没有对齐损失。Q 上升可能只反映键盘习惯被记住，抓取本身并未改变。</p>
+<h3>5.8　归一化、填充维与实验可重复性</h3>
+<p>式 (4) 在 32 维上取平均，25 维填充与 7 维有效动作权重相同。夹爪不走增量，与六个关节的尺度不同，却进入同一套统计量。H20 与本机的默认数据目录名也不一致。此外，在线回放不落盘，进程结束后只剩下至多每 20000 步保存的权重，无法复现当时的缓冲区。这些因素都会使第 4 节的开环误差先于真机暴露出来。</p>
+
+<h2 id="s6">6　结论</h2>
+<p>当前实现把 Real-Time EXPO-FT 的前缀 flow matching、延迟重叠和 Q 筛选接到了 7 维右臂与两路相机上。式 (2)–(11) 与学习器中的实现一致，控制预算是 30 Hz 下约 167 ms 的重叠。这一致性只说明系统会按上述数学运行。稀疏键盘回报、过时观测上的去噪、过滤器目标与执行动作的偏离，以及冻结的视觉塔，都可能使在线 Q 的改善无法转化为分拣成功率。第 4 节的四项测量完成之前，不宜把该设计视为已经适用于这一任务。</p>
+
+<h2 id="refs">参考文献</h2>
+<ol class="refs">
+  <li>Dong P, Hung K H, Sadigh D, Finn C. Reinforcement learning for real-time vision-language-action policies. arXiv:2609.18207, 2026.</li>
+  <li>Dong P, Hung K H, Gao T, Sadigh D, Finn C. EXPO-FT: sample-efficient reinforcement learning finetuning for vision-language-action models. arXiv:2605.25477, 2026.</li>
+  <li>Black K, Ren A Z, Equi M, Levine S. Training-time action conditioning for efficient real-time chunking. arXiv:2512.05964, 2025.</li>
+  <li>Black K, Brown N, Driess D, et al. π<sub>0</sub>: a vision-language-action flow model for general robot control. arXiv:2410.24164, 2024.</li>
+</ol>
+
+<p class="fn">公式与表格中的数值来自本仓库脚本与学习器，不是文献<sup>[1]</sup>在 DROID 上的默认批量或视界。π<sub>0.5</sub> 在实现中由 OpenPI 的 <code>Pi0Config(pi05=True)</code> 实例化，文献<sup>[4]</sup>给出的是该 flow matching 动作模型的前身。操作命令、路径与验收见 <a href="cobot_magic_expo_ft.html">cobot_magic_expo_ft.html</a>。</p>
+
+</article>
+</body>
+</html>

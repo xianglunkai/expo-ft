@@ -3,6 +3,7 @@
 
 import os
 import logging
+import threading
 import time
 
 import numpy as np
@@ -15,9 +16,10 @@ import etils.epath as epath
 
 import wandb
 from expo_ft.agents import initialize_checkpoint_dir
-from expo_ft.data.replay_buffer import create_replay_buffer
+from expo_ft.agents.alg.batch_utils import CRITIC_CAMERA_KEYS
+from expo_ft.data.replay_buffer import create_replay_buffer, _critic_key_to_storage
 from expo_ft.data.batch_processor import BatchProcessor
-from expo_ft.env.droid_utils import process_droid_dataset
+from expo_ft.env.task_dataset import load_task_dataset
 from expo_ft.utils.train_utils import (
     get_batch_info, init_logging, init_wandb, set_compilation_cache_dir,
 )
@@ -72,8 +74,6 @@ def main(_):
             f"train_offline_rtc.py supports model_cls=RTCLearner only; got {FLAGS.config.model_cls!r}. "
             "Use configs/model/rtc_pi_config.py."
         )
-    if FLAGS.config_task.env_type != "droid":
-        raise ValueError(f"Unsupported env_type: {FLAGS.config_task.env_type}")
     if FLAGS.batch_size % jax.device_count() != 0:
         raise ValueError(
             f"Batch size {FLAGS.batch_size} must be divisible by num devices {jax.device_count()}."
@@ -89,7 +89,6 @@ def main(_):
 
     log_dir = os.path.join(FLAGS.output_dir, FLAGS.run_name)
     checkpoint_dir = os.path.join(log_dir, "checkpoints")
-    os.makedirs(checkpoint_dir, exist_ok=True)
 
     checkpoint_dir_path = epath.Path(checkpoint_dir)
     checkpoint_manager, resuming = initialize_checkpoint_dir(
@@ -102,25 +101,39 @@ def main(_):
     init_wandb(checkpoint_dir_path, resuming, FLAGS.project_name, FLAGS.run_name)
     wandb.config.update(FLAGS.flag_values_dict(), allow_val_change=resuming)
 
-    dataset = process_droid_dataset(
-        FLAGS.dataset_path,
-        FLAGS.config_task,
-        num_data=FLAGS.num_data,
-    )
-    if not dataset:
-        raise ValueError(f"No demos loaded from {FLAGS.dataset_path}.")
-    example_action = dataset[0]["actions"][np.newaxis]
-
     task_description = getattr(FLAGS.config_task, "language_instruction", "")
     if not task_description:
         raise ValueError("config_task.language_instruction is required for offline training.")
     logger.info("Offline training with task prompt %r.", task_description)
 
+    # Decode demos while pi05_base is restored. OpenPI overlaps workers with
+    # model init the same way; this path used to finish all 115k frames first.
+    loaded = {}
+
+    def _load_demos():
+        try:
+            loaded["dataset"] = load_task_dataset(
+                FLAGS.dataset_path, FLAGS.config_task, FLAGS.num_data
+            )
+        except Exception as exc:
+            loaded["error"] = exc
+
+    loader = threading.Thread(target=_load_demos, name="cobot-demo-loader", daemon=True)
+    loader.start()
+
     actor, actor_train_state, target_actor_params, agent_kwargs, vla_metadata = build_pi05(
         FLAGS.config, FLAGS.seed, mesh, data_sharding, replicated_sharding,
-        resuming, task_description,
+        resuming, task_description, init_target=False,
     )
+    loader.join()
+    if "error" in loaded:
+        raise loaded["error"]
+    dataset = loaded.get("dataset")
+    if not dataset:
+        raise ValueError(f"No demos loaded from {FLAGS.dataset_path}.")
+    example_action = dataset[0]["actions"][np.newaxis]
     # The demos are the whole dataset: nothing is inserted after them.
+    critic_camera_keys = tuple(getattr(FLAGS.config_task, "critic_camera_keys", CRITIC_CAMERA_KEYS))
     replay_buffer = create_replay_buffer(
         config=FLAGS.config,
         example_action=example_action,
@@ -128,6 +141,7 @@ def main(_):
         task_description=task_description,
         replan_steps=FLAGS.replan_steps,
         seed=FLAGS.seed,
+        critic_camera_keys=critic_camera_keys,
     )
     # DAgger-style HIL sampling draws the actor batch from the demo chunks, so no
     # offline buffer or success-only actor batch is involved.
@@ -143,12 +157,15 @@ def main(_):
         dataset=dataset,
     )
 
-    agent_example_observation, agent_example_state, agent_example_action = replay_buffer.convert_to_critic_format({
-        "base_image": replay_buffer.dataset_dict["base_image"][0][np.newaxis],
-        "left_wrist_image": replay_buffer.dataset_dict["left_wrist_image"][0][np.newaxis],
-        "state": replay_buffer.dataset_dict["state"][0][np.newaxis],
-        "actions": replay_buffer.dataset_dict["actions"][0][np.newaxis],
-    })
+    critic_example = {
+        _critic_key_to_storage(k): replay_buffer.dataset_dict[_critic_key_to_storage(k)][0][np.newaxis]
+        for k in critic_camera_keys
+    }
+    critic_example["state"] = replay_buffer.dataset_dict["state"][0][np.newaxis]
+    critic_example["actions"] = replay_buffer.dataset_dict["actions"][0][np.newaxis]
+    agent_example_observation, agent_example_state, agent_example_action = (
+        replay_buffer.convert_to_critic_format(critic_example)
+    )
     actor.action_dim = agent_example_action.squeeze().shape[-1]
     actor.state_dim = agent_example_state.squeeze().shape[-1]
     agent = load_agent(

@@ -367,12 +367,16 @@ def _jitted_pack_observation(transformed_inputs):
 
 
 def build_pi05(config, seed, mesh, data_sharding, replicated_sharding,
-               resume, default_prompt):
+               resume, default_prompt, *, init_target=True):
     """Build Pi05 actor, train state, target params, and metadata from agent config.
 
     Returns (actor, actor_train_state, target_actor_params, agent_kwargs, metadata)
     where metadata is a dict with action_horizon, resize_size, freeze_encoder
     ready to pass into EXPOLearner.create().
+
+    ``init_target=False`` skips the second weight load. RTC-SFT does not use a
+    target network; loading pi05_base again allocates another full train state
+    on every GPU and OOMs an H20 that already holds the actor.
     """
     from expo_ft.utils.train_utils import build_pi05_config
     agent_kwargs, pi05_train_config, pi05_resize_size, _ = build_pi05_config(config)
@@ -393,7 +397,9 @@ def build_pi05(config, seed, mesh, data_sharding, replicated_sharding,
         freeze_pi05_encoder=freeze_encoder,
         infer_device=jax.devices()[0],
     )
-    if resume:
+    if not init_target:
+        target_actor_params = None
+    elif resume:
         target_actor_params = actor.get_params(actor_train_state)
     else:
         target_actor_params = actor.init_target_params(target_rng, resume=resume)
