@@ -54,6 +54,85 @@ flags.DEFINE_boolean("only_base_actions", False, "Use only base (OpenPI) actions
 flags.DEFINE_float("sim_latency", 0.0, "Simulated extra inference latency in ms added to each sample_actions call; 0 disables.")
 flags.DEFINE_boolean("save_video", True, "Save evaluation videos.")
 flags.DEFINE_integer("fsdp_devices", 1, "Number of FSDP devices (match training).")
+flags.DEFINE_boolean(
+    "warmup",
+    True,
+    "After env reset, JIT-compile sample_actions (delay=0 and delayed path) "
+    "before the scored episodes. Does not send those actions to the arm.",
+)
+flags.DEFINE_float(
+    "post_warmup_pause_s",
+    3.0,
+    "Seconds to wait after warmup (and after the initial reset) before episode 1. "
+    "Use 0 to start immediately once compile finishes.",
+)
+
+
+def _warmup_policy(agent, observation, *, model_cls, delay, only_base_actions, logger):
+    """Compile the deploy graphs once, like openpi server_rlt_policy warmup.
+
+    Uses a live observation but never calls env.step, so the arm stays put.
+    """
+    import jax.numpy as jnp
+
+    logger.info("Warming up policy graphs (arm not moving) ...")
+    t0 = time.time()
+    if model_cls == "RTCLearner":
+        chunk, agent, _ = agent.sample_actions(
+            observation,
+            only_base_actions=only_base_actions,
+            delay=0,
+        )
+        jax.block_until_ready(chunk)
+        logger.info("warmup delay=0 done in %.1fs", time.time() - t0)
+        if delay > 0:
+            model_dim = int(agent.actor.model_config.action_dim)
+            prefix = jnp.zeros((delay, model_dim), dtype=jnp.float32)
+            t1 = time.time()
+            chunk, agent, _ = agent.sample_actions(
+                observation,
+                only_base_actions=only_base_actions,
+                delay=delay,
+                p1_observations=observation,
+                prefix_padded=prefix,
+            )
+            jax.block_until_ready(chunk)
+            logger.info("warmup delay=%d done in %.1fs", delay, time.time() - t1)
+    elif hasattr(agent, "sample_pre_cache"):
+        t1 = time.time()
+        precached, agent = agent.sample_pre_cache(observation, prefix_padded=None)
+        jax.block_until_ready(precached)
+        chunk, agent, _ = agent.sample_actions(
+            observation,
+            precached=precached,
+            delay=0,
+            only_base_actions=only_base_actions,
+        )
+        jax.block_until_ready(chunk)
+        logger.info("warmup delay=0 (pre_cache) done in %.1fs", time.time() - t1)
+        if delay > 0:
+            model_dim = int(agent.actor.model_config.action_dim)
+            prefix = jnp.zeros((delay, model_dim), dtype=jnp.float32)
+            t2 = time.time()
+            precached, agent = agent.sample_pre_cache(observation, prefix_padded=prefix)
+            jax.block_until_ready(precached)
+            chunk, agent, _ = agent.sample_actions(
+                observation,
+                precached=precached,
+                delay=delay,
+                only_base_actions=only_base_actions,
+            )
+            jax.block_until_ready(chunk)
+            logger.info("warmup delay=%d (pre_cache) done in %.1fs", delay, time.time() - t2)
+    else:
+        chunk, agent, _ = agent.sample_actions(
+            observation,
+            only_base_actions=only_base_actions,
+        )
+        jax.block_until_ready(chunk)
+        logger.info("warmup sample_actions done in %.1fs", time.time() - t0)
+    logger.info("Policy warmup finished in %.1fs total", time.time() - t0)
+    return agent
 
 
 def main(_):
@@ -124,9 +203,11 @@ def main(_):
         raise ValueError(f"Unsupported model class: {model_cls}")
 
     from expo_ft.agents.vla.pi05 import build_pi05
+    # Eval never trains π0.5; skip Adam/EMA (same as openpi create_trained_policy).
     actor, actor_train_state, target_actor_params, agent_kwargs, vla_metadata = build_pi05(
         config, FLAGS.seed, mesh, data_sharding, replicated_sharding,
         resume=(step != 0), default_prompt=task_description,
+        init_optimizer=False,
     )
 
     # Must match training (train_pi_robo.py), or the critic stem conv is built with the
@@ -216,10 +297,30 @@ def main(_):
         port=FLAGS.client_port,
     )
     print("resetting environment...")
-    env.reset()
+    observation = env.reset()
     print("environment reset")
+    logger.info(
+        "IPC terminal controls (run_policy.sh): "
+        "1+Enter success; 2+Enter or 0+Enter abort→home; 3+Enter ignore. "
+        "Hardware e-stop for true emergency. Ctrl+C homes then exits."
+    )
 
-    time.sleep(10)
+    if FLAGS.warmup:
+        observation = env.get_observation()
+        agent = _warmup_policy(
+            agent,
+            observation,
+            model_cls=model_cls,
+            delay=FLAGS.delay,
+            only_base_actions=FLAGS.only_base_actions,
+            logger=logger,
+        )
+        print("resetting environment after warmup...")
+        observation = env.reset()
+        print("environment reset after warmup")
+    if FLAGS.post_warmup_pause_s > 0:
+        logger.info("Pause %.1fs before episode 1 (arm should be at home).", FLAGS.post_warmup_pause_s)
+        time.sleep(FLAGS.post_warmup_pause_s)
 
     successes = []
     episode_returns = []
@@ -242,6 +343,60 @@ def main(_):
         if FLAGS.sim_latency > 0:
             time.sleep(FLAGS.sim_latency / 1000.0)
 
+    try:
+        _run_eval_episodes(
+            env=env,
+            agent=agent,
+            logger=logger,
+            max_traj_len=max_traj_len,
+            dt=dt,
+            successes=successes,
+            episode_returns=episode_returns,
+            episode_lengths=episode_lengths,
+            supports_pre_cache_delay=supports_pre_cache_delay,
+            supports_rtc_delay=supports_rtc_delay,
+            inference_executor=inference_executor,
+            clear_pending=clear_pending,
+            simulate_latency=simulate_latency,
+        )
+    except KeyboardInterrupt:
+        logger.warning("Interrupted — clearing plan and homing the arm.")
+        try:
+            env.reset()
+        except Exception as exc:
+            logger.warning("home-on-interrupt reset failed: %s", exc)
+        raise
+    finally:
+        if inference_executor is not None:
+            inference_executor.shutdown(wait=False)
+
+    n = len(successes)
+    success_rate = float(np.mean(successes)) if n else 0.0
+    mean_return = float(np.mean(episode_returns)) if n else 0.0
+    mean_len = float(np.mean(episode_lengths)) if n else 0.0
+    logger.info(
+        "Evaluation complete: success_rate=%.2f (%d/%d) mean_return=%.2f mean_len=%.1f",
+        success_rate, int(np.sum(successes)) if n else 0, n, mean_return, mean_len,
+    )
+    print(f"success_rate={success_rate:.2f} mean_return={mean_return:.2f} mean_len={mean_len:.1f}")
+
+
+def _run_eval_episodes(
+    *,
+    env,
+    agent,
+    logger,
+    max_traj_len,
+    dt,
+    successes,
+    episode_returns,
+    episode_lengths,
+    supports_pre_cache_delay,
+    supports_rtc_delay,
+    inference_executor,
+    clear_pending,
+    simulate_latency,
+):
     for ep in range(FLAGS.num_episodes):
         logger.info("Episode %d / %d", ep + 1, FLAGS.num_episodes)
         observation = env.reset()
@@ -252,6 +407,7 @@ def main(_):
         sample_info_history = []
         ep_return = 0.0
         ep_len = 0
+        success = False
 
         def run_pre_cache(agent_snapshot, obs, prefix):
             compute_start = time.time()
@@ -260,6 +416,7 @@ def main(_):
             return precached, new_agent, (time.time() - compute_start) * 1000.0
 
         def run_rtc_sample(agent_snapshot, obs, prefix):
+            nonlocal agent
             compute_start = time.time()
             action_chunk, new_agent, sample_info = agent_snapshot.sample_actions(
                 obs,
@@ -311,6 +468,18 @@ def main(_):
             t_info0 = time.time()
             done, success, reward, _ = env.get_info_for_step()
             timing["info_ms"] = (time.time() - t_info0) * 1000.0
+
+            # Operator abort (0/2): stop before planning/sending the next command.
+            if done:
+                action_plan.clear()
+                pending_inference = clear_pending(pending_inference)
+                ep_return += reward
+                ep_len += 1
+                logger.info(
+                    "[timing][ep %d step %d] abort/done before act (no further commands)",
+                    ep + 1, step,
+                )
+                break
 
             launch_async_inference(observation)
 
@@ -387,22 +556,6 @@ def main(_):
             ep_return += reward
             ep_len += 1
 
-            if done:
-                timing_total_ms = (time.time() - step_t0) * 1000.0
-                logger.info(
-                    "[timing][ep %d step %d] total=%.1fms wait=%.1f obs=%.1f info=%.1f plan=%.1f act=%.1f done=%s",
-                    ep + 1,
-                    step,
-                    timing_total_ms,
-                    timing["wait_ms"],
-                    timing["obs_ms"],
-                    timing["info_ms"],
-                    timing["plan_ms"],
-                    timing["act_ms"],
-                    done,
-                )
-                break
-
             # Pace command dispatches at control_hz. Anchor to the previous
             # env.step dispatch time, not the previous env.step return time.
             if last_control_start is None:
@@ -439,16 +592,10 @@ def main(_):
         episode_returns.append(ep_return)
         episode_lengths.append(ep_len)
         logger.info("  success=%s return=%.1f len=%d", success, ep_return, ep_len)
-
-    n = len(successes)
-    success_rate = float(np.mean(successes))
-    mean_return = float(np.mean(episode_returns))
-    mean_len = float(np.mean(episode_lengths))
-    logger.info("Evaluation complete: success_rate=%.2f (%d/%d) mean_return=%.2f mean_len=%.1f",
-                success_rate, int(np.sum(successes)), n, mean_return, mean_len)
-    print(f"success_rate={success_rate:.2f} mean_return={mean_return:.2f} mean_len={mean_len:.1f}")
-    if inference_executor is not None:
-        inference_executor.shutdown(wait=True)
+        try:
+            env.reset()
+        except Exception as exc:
+            logger.warning("post-episode reset failed: %s", exc)
 
 
 if __name__ == "__main__":

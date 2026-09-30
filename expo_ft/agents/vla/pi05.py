@@ -2,6 +2,7 @@
 
 import dataclasses
 import functools
+import logging
 from functools import partial
 from typing import Any, Dict, Optional, Tuple, Union
 
@@ -76,7 +77,15 @@ def pi05_init_train_state(
     *,
     resume: bool,
     is_target: bool = False,
+    init_optimizer: bool = True,
 ) -> tuple[training_utils.TrainState, Any]:
+    """Build a pi0.5 ``TrainState``.
+
+    When ``init_optimizer=False`` (frozen / inference-only base, matching openpi
+    ``create_trained_policy`` / RLT Machine-A usage), skip Adam + EMA. That
+    avoids the ~2x optimizer footprint that OOMs a 24 GB GPU after restoring
+    the ~12 GB checkpoint. Params are cast to bf16 like openpi inference.
+    """
     tx = _optimizer.create_optimizer(
         config.optimizer, config.lr_schedule, weight_decay_mask=None
     )
@@ -93,20 +102,34 @@ def pi05_init_train_state(
             model = nnx.merge(graphdef, state)
 
         params = nnx.state(model)
-        params = nnx_utils.state_map(
-            params,
-            config.freeze_filter,
-            lambda p: p.replace(p.value.astype(jnp.bfloat16)),
-        )
+        if init_optimizer:
+            params = nnx_utils.state_map(
+                params,
+                config.freeze_filter,
+                lambda p: p.replace(p.value.astype(jnp.bfloat16)),
+            )
+            opt_state = tx.init(params.filter(config.trainable_filter))
+            ema_decay = config.ema_decay
+            ema_params = None if config.ema_decay is None else params
+        else:
+            # Inference / frozen base: bf16 weights only, no Adam/EMA buffers.
+            params = nnx_utils.state_map(
+                params,
+                nnx.Param,
+                lambda p: p.replace(p.value.astype(jnp.bfloat16)),
+            )
+            opt_state = ()
+            ema_decay = None
+            ema_params = None
 
         return training_utils.TrainState(
             step=0,
             params=params,
             model_def=nnx.graphdef(model),
             tx=tx,
-            opt_state=tx.init(params.filter(config.trainable_filter)),
-            ema_decay=config.ema_decay,
-            ema_params=None if config.ema_decay is None else params,
+            opt_state=opt_state,
+            ema_decay=ema_decay,
+            ema_params=ema_params,
         )
 
     train_state_shape = jax.eval_shape(init, init_rng)
@@ -367,7 +390,7 @@ def _jitted_pack_observation(transformed_inputs):
 
 
 def build_pi05(config, seed, mesh, data_sharding, replicated_sharding,
-               resume, default_prompt, *, init_target=True):
+               resume, default_prompt, *, init_target=True, init_optimizer=None):
     """Build Pi05 actor, train state, target params, and metadata from agent config.
 
     Returns (actor, actor_train_state, target_actor_params, agent_kwargs, metadata)
@@ -377,10 +400,21 @@ def build_pi05(config, seed, mesh, data_sharding, replicated_sharding,
     ``init_target=False`` skips the second weight load. RTC-SFT does not use a
     target network; loading pi05_base again allocates another full train state
     on every GPU and OOMs an H20 that already holds the actor.
+
+    ``init_optimizer=None`` defaults to ``config.train_base_actor`` (True if
+    absent). Set False for inference / frozen-base online RL so Adam+EMA are
+    not allocated for the full π0.5 (openpi RLT keeps the VLA params-only).
     """
     from expo_ft.utils.train_utils import build_pi05_config
     agent_kwargs, pi05_train_config, pi05_resize_size, _ = build_pi05_config(config)
     freeze_encoder = agent_kwargs.pop("freeze_pi05_encoder", False)
+    if init_optimizer is None:
+        init_optimizer = bool(agent_kwargs.get("train_base_actor", True))
+    if not init_optimizer:
+        logging.info(
+            "π0.5 load: init_optimizer=False (bf16 params only, no Adam/EMA); "
+            "matches openpi inference / frozen-base online RL."
+        )
 
     rng = jax.random.PRNGKey(seed)
     init_rng, rng = jax.random.split(rng)
@@ -396,10 +430,13 @@ def build_pi05(config, seed, mesh, data_sharding, replicated_sharding,
         replicated_sharding=replicated_sharding,
         freeze_pi05_encoder=freeze_encoder,
         infer_device=jax.devices()[0],
+        init_optimizer=init_optimizer,
     )
     if not init_target:
         target_actor_params = None
-    elif resume:
+    elif resume or not init_optimizer:
+        # Frozen base never updates the target; reuse actor params instead of
+        # reloading a second ~12 GB copy (would OOM a 24 GB GPU).
         target_actor_params = actor.get_params(actor_train_state)
     else:
         target_actor_params = actor.init_target_params(target_rng, resume=resume)
@@ -484,7 +521,10 @@ class Pi05Agent(Model):
                 *self.data_config.model_transforms.outputs,
                 _transforms.Unnormalize(self.data_config.norm_stats, use_quantiles=self.data_config.use_quantile_norm),
                 *self.data_config.data_transforms.outputs,
-                # *repack_transforms.outputs,
+                # Same placement as openpi Policy output_transforms: physical absolute actions.
+                _transforms.OptimizeActionsQP(
+                    dt=0.033, w_data=1.0, w_acc=100.0, w_jerk=100.0, fix_ends=False, verbose=False
+                ),
             ]
         else:
             transforms = [
@@ -510,6 +550,7 @@ class Pi05Agent(Model):
         default_prompt: Optional[str] = None,
         freeze_pi05_encoder: bool = False,
         infer_device: Optional[jax.Device] = None,
+        init_optimizer: bool = True,
     ) -> tuple["Pi05Agent", Any]:
         """Initialize a Pi05Agent instance using init_train_state."""
         train_state, train_state_sharding = pi05_init_train_state(
@@ -518,6 +559,7 @@ class Pi05Agent(Model):
             mesh,
             resume=resume,
             is_target=False,
+            init_optimizer=init_optimizer,
         )
 
         agent = cls(
@@ -543,8 +585,8 @@ class Pi05Agent(Model):
 
     def process_raw_inputs(self, raw_observations, action_dim, resize_size, normalize=True):
         """Convert raw env observations into a batched model-ready Observation dict."""
-        # create a dummy actions
-        raw_observations["actions"] = np.zeros(action_dim)
+        # Dummy action chunk for DeltaActions (needs a time axis). Dropped after pack.
+        raw_observations["actions"] = np.zeros((1, int(action_dim)), dtype=np.float32)
         for key, value in raw_observations.items():
             raw_observations[key] = np.asarray(value)
             if "image" in key:
@@ -567,13 +609,41 @@ class Pi05Agent(Model):
             "token_loss_mask": packed.get("token_loss_mask"),
         }
 
-    def process_transformed_outputs(self, transformed_actions, unnormalize=True):
-        """Unnormalize unpadded actions back to the environment action space."""
+    def _state_for_outputs(self, state, batch_size: int) -> np.ndarray:
+        """Pad/broadcast normalized proprio to (batch, model_action_dim) for AbsoluteActions."""
+        model_dim = int(self.model_config.action_dim)
+        if state is None:
+            logging.warning(
+                "process_transformed_outputs called without state; AbsoluteActions "
+                "will treat proprio as zeros (wrong absolute joints)."
+            )
+            return np.zeros((batch_size, model_dim), dtype=np.float32)
+        state_arr = np.asarray(jax.device_get(state), dtype=np.float32)
+        if state_arr.ndim == 1:
+            state_arr = np.broadcast_to(state_arr[None, :], (batch_size, state_arr.shape[0])).copy()
+        elif state_arr.shape[0] == 1 and batch_size > 1:
+            state_arr = np.broadcast_to(state_arr, (batch_size, state_arr.shape[-1])).copy()
+        elif state_arr.shape[0] != batch_size:
+            raise ValueError(
+                f"state batch {state_arr.shape[0]} != actions batch {batch_size}"
+            )
+        if state_arr.shape[-1] < model_dim:
+            pad = np.zeros((batch_size, model_dim), dtype=np.float32)
+            pad[:, : state_arr.shape[-1]] = state_arr
+            return pad
+        return state_arr[..., :model_dim]
+
+    def process_transformed_outputs(self, transformed_actions, state=None, unnormalize=True):
+        """Unnormalize unpadded actions back to the environment action space.
+
+        Pass the normalized ``state`` from ``process_raw_inputs`` so AbsoluteActions
+        adds the real current joints (not dataset-mean pose from zero proprio).
+        """
+        del unnormalize  # output_transforms already built with/without Unnormalize
         n = transformed_actions.shape[0]
         padded = self._pad_actions(transformed_actions.reshape(n, -1))
-        dummy_state = np.zeros((n, self.model_config.action_dim), dtype=np.float32)
         output_dict = {
-            "state": dummy_state,
+            "state": self._state_for_outputs(state, n),
             "actions": np.array(padded),
         }
         processed = [

@@ -128,6 +128,12 @@ async def _handle_environment_request(websocket):
                 if operation == "create_env":
                     task_config = load_task_config(_config_task_path)
                     _task_config = task_config
+                    if "env" not in task_config or task_config.env is None:
+                        raise RuntimeError(
+                            f"Task config {_config_task_path!r} has no env class. "
+                            "On the IPC/client machine the robot env must import "
+                            "(check ROS, PYTHONPATH, and client/.venv deps such as opencv)."
+                        )
                     env_name = task_config.env_name
                     env_usage = request["env_usage"]
                     _env_create_counter += 1

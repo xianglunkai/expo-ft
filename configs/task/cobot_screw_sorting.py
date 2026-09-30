@@ -9,8 +9,9 @@ def get_config():
     try:
         from client.envs.cobot_env import CobotMagicEnv
         c.env = CobotMagicEnv
-    except Exception:
-        print("Not importing cobot env (ok on GPU learner)")
+    except Exception as exc:
+        # GPU learner does not need the ROS env class; the IPC rollout client does.
+        print(f"Not importing cobot env ({type(exc).__name__}: {exc})")
 
     # Trailing period matches tasks.jsonl of screw_sorting_single_sft.
     c.language_instruction = (
@@ -21,7 +22,7 @@ def get_config():
     c.example_action = np.zeros((1, 7), np.float32)
     c.image_size = (180, 320)
     c.control_hz = 30
-    c.auto_reset_steps = 400  # ~13s @ 30Hz
+    c.auto_reset_steps = 800  # ~26s @ 30Hz
     c.edit_action_xyzg = False
     c.use_single_arm = True
     c.critic_camera_keys = ("base_0_rgb", "right_wrist_0_rgb")

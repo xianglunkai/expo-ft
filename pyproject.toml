@@ -12,7 +12,9 @@ dependencies = [
     "etils[epath]>=1.5.0",
     "h5py>=3.10.0",
     "optax>=0.2.0",
+    "osqp>=0.6.7",
     "scipy>=1.11.0",
+    "matplotlib>=3.8.0",
     "tensorflow-probability>=0.23.0",
     "websockets~=13.1",  # 14+ tightened handshake strictness; pin to match client side
 ]

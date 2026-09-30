@@ -47,7 +47,12 @@ flags.DEFINE_integer("num_batch", 1, "Number of episodes per update batch (only 
 flags.DEFINE_integer("num_updates", 0, "Upstream-style fixed number of gradient updates per trigger (episode/step/batch). 0 = derive the count from --step_interval instead.")
 flags.DEFINE_integer("step_interval", 1, "One gradient update per this many collected transitions. update_type=step runs it every step_interval env steps; episode/batch runs the accumulated equivalent at the episode boundary (remainder carries over).")
 flags.DEFINE_integer("batch_size", 64, "Mini batch size.")
-flags.DEFINE_integer("max_steps", 500_000, "Number of training steps.")
+flags.DEFINE_integer("max_steps", 500_000, "Number of training steps (env control steps).")
+flags.DEFINE_integer(
+    "max_episodes",
+    0,
+    "Stop after this many online episodes in this run (0 = ignore; only max_steps applies).",
+)
 flags.DEFINE_integer("num_data", 0, "Max number of offline demo episodes to load (0 = all).")
 flags.DEFINE_boolean("tqdm", True, "Use tqdm progress bar.")
 flags.DEFINE_boolean("checkpoint_model", False, "Save agent checkpoint during training.")
@@ -307,6 +312,12 @@ def main(_):
     transitions_since_update = 0
     combine_rng = jax.random.PRNGKey(FLAGS.seed + 100)
     first_step_of_episode = True
+    online_episodes_this_run = 0
+    if FLAGS.max_episodes > 0:
+        logging.info(
+            "Will stop after %d online episodes this run (also capped by max_steps=%d).",
+            FLAGS.max_episodes, FLAGS.max_steps,
+        )
 
     for i in tqdm.tqdm(
         range(start_step, FLAGS.max_steps + 1), smoothing=0.1, disable=not FLAGS.tqdm
@@ -411,6 +422,7 @@ def main(_):
 
             training_log.on_episode_done(episode_log, success, step_metrics)
             episode_log.reset()
+            online_episodes_this_run += 1
             with buffer_lock:
                 batch_processor.on_episode_start()
 
@@ -422,6 +434,13 @@ def main(_):
             done = False
             action_type = "policy"
             action_plan.clear()
+
+            if FLAGS.max_episodes > 0 and online_episodes_this_run >= FLAGS.max_episodes:
+                logging.info(
+                    "Reached --max_episodes=%d (this run); stopping at step %d.",
+                    FLAGS.max_episodes, i,
+                )
+                break
 
         timer.tock("post_step")
         timer.tock("loop_time")
@@ -437,8 +456,9 @@ def main(_):
 
     if FLAGS.checkpoint_model:
         try:
-            save_checkpoint(checkpoint_manager, agent, FLAGS.max_steps)
-            logging.info(f"Saved final agent checkpoint at step {FLAGS.max_steps}")
+            final_step = int(i)
+            save_checkpoint(checkpoint_manager, agent, final_step)
+            logging.info(f"Saved final agent checkpoint at step {final_step}")
         except Exception as e:
             logging.error(f"Could not save final checkpoint: {e}")
         logging.info("Waiting for checkpoint manager to finish")

@@ -734,16 +734,21 @@ class RealTimeEXPOFTLearner(AgentLearner, struct.PyTreeNode):
 
         D_pad = self.actor.model_config.action_dim
 
+        # Critic / edit correction conditions on the CURRENT obs.
+        transformed_inputs_cur = self.actor.process_raw_inputs(observations, self.action_dim, self.resize_size)
+
         def _unnorm(win_norm):
             # Pad the window to a full chunk for process_transformed_outputs, then slice [:r] back.
             n = win_norm.shape[0]
-            win_full = jnp.concatenate(
-                [win_norm, jnp.zeros((n, H - r, self.action_dim), dtype=win_norm.dtype)], axis=1,
-            )
-            return jnp.asarray(self.actor.process_transformed_outputs(win_full))[:, :r, :]
-
-        # Critic / edit correction conditions on the CURRENT obs.
-        transformed_inputs_cur = self.actor.process_raw_inputs(observations, self.action_dim, self.resize_size)
+            # Hold the last command instead of zeros. Output smoothing is a temporal QP
+            # over the whole chunk; a zero tail would pull the executed window toward it.
+            tail = jnp.repeat(win_norm[:, -1:, :], H - r, axis=1)
+            win_full = jnp.concatenate([win_norm, tail], axis=1)
+            return jnp.asarray(
+                self.actor.process_transformed_outputs(
+                    win_full, state=transformed_inputs_cur["state"],
+                )
+            )[:, :r, :]
 
         # Window slice -> critic encode -> edit candidates -> Q-select, as one jitted call.
         sel = _jitted_fast_select(

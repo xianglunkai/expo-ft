@@ -55,9 +55,15 @@ class Model(ABC):
     def process_transformed_outputs(
         self,
         transformed_actions: Union[jnp.ndarray, np.ndarray],
+        state: Optional[Union[jnp.ndarray, np.ndarray]] = None,
         unnormalize: bool = True,
     ) -> jnp.ndarray:
-        """Unnormalize model actions back to the environment action space."""
+        """Unnormalize model actions back to the environment action space.
+
+        ``state`` must be the normalized proprio from ``process_raw_inputs`` so
+        AbsoluteActions can recover absolute joint targets. Passing None uses
+        zeros and is incorrect for absolute-action robots.
+        """
         raise NotImplementedError
 
     @abstractmethod

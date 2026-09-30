@@ -263,7 +263,9 @@ class RTCLearner(AgentLearner, struct.PyTreeNode):
                 train=False,
                 num_samples=1,
             )
-            raw_actions = self.actor.process_transformed_outputs(transformed_actions)
+            raw_actions = self.actor.process_transformed_outputs(
+                transformed_actions, state=transformed_inputs["state"],
+            )
             executed_padded = self.actor._pad_actions(
                 jnp.asarray(transformed_actions).reshape(1, self.action_horizon, self.action_dim)
             )[0, :self.replan_steps]
@@ -321,7 +323,9 @@ class RTCLearner(AgentLearner, struct.PyTreeNode):
             chunk_padded = self.actor._pad_actions(
                 jnp.asarray(transformed_actions).reshape(1, H, self.action_dim)
             )[0]
-            raw_actions = self.actor.process_transformed_outputs(transformed_actions)[0]
+            raw_actions = self.actor.process_transformed_outputs(
+                transformed_actions, state=inputs["state"],
+            )[0]
             output_chunk = raw_actions
             executed_padded = chunk_padded[:self.replan_steps]
             sample_info = {
@@ -350,7 +354,9 @@ class RTCLearner(AgentLearner, struct.PyTreeNode):
             prefixed_padded = self.actor._pad_actions(
                 jnp.asarray(prefixed_actions).reshape(1, H, self.action_dim)
             )[0]
-            raw_actions = self.actor.process_transformed_outputs(prefixed_actions)
+            raw_actions = self.actor.process_transformed_outputs(
+                prefixed_actions, state=inputs["state"],
+            )
             output_chunk = jnp.asarray(raw_actions)[0, delay:, :]
             executed_padded = prefixed_padded[delay:delay + self.replan_steps]
             sample_info = {

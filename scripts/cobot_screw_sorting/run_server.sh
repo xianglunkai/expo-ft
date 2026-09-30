@@ -31,10 +31,14 @@ python train_pi_robo.py \
   --update_type=episode \
   --step_interval=30 \
   --offline_ratio=0 \
+  --max_episodes="${MAX_EPISODES:-50}" \
   --config=configs/model/realtime_expo_ft_pi_config.py \
+  --config.train_base_actor=False \
   --config.valids_keep_terminal_windows=True \
-  --config.N=8 --config.n_edit_samples=8 \
-  --config.filter_N=8 --config.filter_n_edit=1 \
+  --config.N=8 \
+  --config.n_edit_samples=8 \
+  --config.filter_N=8  \
+  --config.filter_n_edit=1 \
   --config.edit_scale=0.1 \
   --config.filter_add_delayed_obs=True \
   --config.pi05_config_name="$config_name" \
@@ -45,6 +49,9 @@ python train_pi_robo.py \
   --output_dir=./checkpoints/cobot_screw_online \
   --client_host=0.0.0.0 --client_port=8103 \
   --fsdp_devices=1 \
-  --delay=5 --replan_steps=8 \
-  --checkpoint_model --checkpoint_interval=20000 \
+  --delay=6 --replan_steps=10 \
+  --resume \
+  --checkpoint_model \
+  --checkpoint_buffer \
+  --checkpoint_interval=2000 \
   --run_name=rt_screw_single_delay5
