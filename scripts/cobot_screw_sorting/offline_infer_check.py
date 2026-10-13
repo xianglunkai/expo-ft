@@ -298,6 +298,7 @@ def _load_agent(dataset, config, config_task):
         replan_steps=FLAGS.replan_steps,
         seed=FLAGS.seed,
         critic_camera_keys=critic_camera_keys,
+        camera_keys=tuple(getattr(config_task, "camera_keys", ())) or None,
     )
     replay_buffer.insert_dataset(dataset[:1])
     critic_example = {

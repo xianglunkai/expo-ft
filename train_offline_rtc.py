@@ -142,6 +142,7 @@ def main(_):
         replan_steps=FLAGS.replan_steps,
         seed=FLAGS.seed,
         critic_camera_keys=critic_camera_keys,
+        camera_keys=tuple(getattr(FLAGS.config_task, "camera_keys", ())) or None,
     )
     # DAgger-style HIL sampling draws the actor batch from the demo chunks, so no
     # offline buffer or success-only actor batch is involved.

@@ -13,7 +13,7 @@ export XLA_PYTHON_CLIENT_MEM_FRACTION=0.85
 export config_name="${config_name:-pi05_cobot_screw_sorting}"
 LEROBOT_ROOT="${LEROBOT_ROOT:-/data/huggingface/lerobot/openpi/screw_sorting_single_sft}"
 FROM_H20=./checkpoints/from_h20
-RTC_PARAMS="${RTC_PARAMS:-$FROM_H20/rtc_screw_maxdelay10/checkpoints/4000/params}"
+RTC_PARAMS="${RTC_PARAMS:-$FROM_H20/rtc_screw_maxdelay10/checkpoints/4000_new/params}"
 ASSETS_DIR="${ASSETS_DIR:-$FROM_H20/assets/${config_name}}"
 ASSET_ID="${ASSET_ID:-screw_sorting_single_sft_ep279_annotated}"
 
@@ -23,10 +23,12 @@ if [[ ! -d "$RTC_PARAMS" ]]; then
   exit 1
 fi
 
+export WANDB_MODE=offline
+
 python train_pi_robo.py \
   --config_task=configs/task/cobot_screw_sorting.py \
   --dataset_path="$LEROBOT_ROOT" \
-  --num_data=0 \
+  --num_data=10 \
   --batch_size=8 \
   --update_type=episode \
   --step_interval=30 \
@@ -49,9 +51,9 @@ python train_pi_robo.py \
   --output_dir=./checkpoints/cobot_screw_online \
   --client_host=0.0.0.0 --client_port=8103 \
   --fsdp_devices=1 \
-  --delay=6 --replan_steps=10 \
+  --delay=7 --replan_steps=10 \
   --resume \
   --checkpoint_model \
   --checkpoint_buffer \
   --checkpoint_interval=2000 \
-  --run_name=rt_screw_single_delay5
+  --run_name=rt_screw_single_delay7

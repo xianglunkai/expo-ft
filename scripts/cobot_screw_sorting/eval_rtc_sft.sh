@@ -35,4 +35,4 @@ python eval_droid_policy.py \
   --config.pi05_asset_id="$ASSET_ID" \
   --warmup=True \
   --post_warmup_pause_s=3 \
-  --delay=6 --replan_steps=10 --num_episodes="$NUM_EPISODES"
+  --delay=7 --replan_steps=10 --num_episodes="$NUM_EPISODES"

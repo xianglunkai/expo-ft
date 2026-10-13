@@ -163,9 +163,11 @@ class EnvClient:
         response = self._call_operation("create_env", self._prepare_request(request))
         return response["env_id"], response["task_description"]
 
-    def reset(self, env_id: str) -> Tuple[Dict[str, Any], bool]:
-        """Reset an environment."""
-        response = self._call_operation("reset", {"env_id": env_id})
+    def reset(self, env_id: str, wait_for_start: bool = True) -> Tuple[Dict[str, Any], bool]:
+        """Reset an environment. Cobot blocks in reset until the operator presses o."""
+        response = self._call_operation(
+            "reset", {"env_id": env_id, "wait_for_start": wait_for_start}
+        )
         return response["observation"], response["done"]
 
     def step(self, env_id: str, action: np.ndarray) -> Tuple[np.ndarray, str]:
@@ -245,9 +247,17 @@ class EnvClientWrapper:
                     logging.warning(f"{op_name} recovery failed ({e}); retrying recovery...")
                     time.sleep(10)
 
-    def reset(self):
-        """Reset the environment and return observation."""
-        observation, _ = self._call("reset", lambda: self.client.reset(self.env_id))
+    def reset(self, wait_for_start: bool = True):
+        """Reset the environment and return observation.
+
+        wait_for_start=True asks the Cobot client to home, then block until
+        the operator presses o. Pass False to home and return immediately
+        (interrupt, or a home that is not the start of an episode).
+        """
+        observation, _ = self._call(
+            "reset",
+            lambda: self.client.reset(self.env_id, wait_for_start=wait_for_start),
+        )
         return observation
 
     def step(self, action):

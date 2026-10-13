@@ -159,7 +159,11 @@ async def _handle_environment_request(websocket):
                     if env is None:
                         response = {"status": "error", "message": f"Environment {env_id} not found"}
                     else:
-                        obs = env.reset()
+                        wait_for_start = bool(request.get("wait_for_start", True))
+                        try:
+                            obs = env.reset(wait_for_start=wait_for_start)
+                        except TypeError:
+                            obs = env.reset()
                         response = {
                             "status": "success",
                             "observation": obs,

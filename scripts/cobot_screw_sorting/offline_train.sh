@@ -79,7 +79,7 @@ if [ "$DO_STEP4" -eq 1 ]; then
         --num_data=0 \
         --batch_size=64 \
         --fsdp_devices=1 \
-        --replan_steps=8 \
+        --replan_steps=10 \
         --config=configs/model/rtc_pi_config.py \
         --config.freeze_pi05_encoder=False \
         --config.p1_use_prefix_conditioning=True \

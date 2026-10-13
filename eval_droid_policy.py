@@ -223,6 +223,7 @@ def main(_):
         replan_steps=FLAGS.replan_steps,
         seed=FLAGS.seed,
         critic_camera_keys=critic_camera_keys,
+        camera_keys=tuple(getattr(config_task, "camera_keys", ())) or None,
     )
     replay_buffer.insert_dataset(dataset[:1])
 
@@ -297,11 +298,11 @@ def main(_):
         port=FLAGS.client_port,
     )
     print("resetting environment...")
-    observation = env.reset()
+    observation = env.reset(wait_for_start=False)
     print("environment reset")
     logger.info(
-        "IPC terminal controls (run_policy.sh): "
-        "1+Enter success; 2+Enter or 0+Enter abort→home; 3+Enter ignore. "
+        "IPC terminal (run_policy.sh): after home, o+Enter starts the episode. "
+        "During the episode: s+Enter success, f+Enter failure, q+Enter discard. "
         "Hardware e-stop for true emergency. Ctrl+C homes then exits."
     )
 
@@ -316,7 +317,7 @@ def main(_):
             logger=logger,
         )
         print("resetting environment after warmup...")
-        observation = env.reset()
+        observation = env.reset(wait_for_start=False)
         print("environment reset after warmup")
     if FLAGS.post_warmup_pause_s > 0:
         logger.info("Pause %.1fs before episode 1 (arm should be at home).", FLAGS.post_warmup_pause_s)
@@ -362,7 +363,7 @@ def main(_):
     except KeyboardInterrupt:
         logger.warning("Interrupted — clearing plan and homing the arm.")
         try:
-            env.reset()
+            env.reset(wait_for_start=False)
         except Exception as exc:
             logger.warning("home-on-interrupt reset failed: %s", exc)
         raise
@@ -593,7 +594,7 @@ def _run_eval_episodes(
         episode_lengths.append(ep_len)
         logger.info("  success=%s return=%.1f len=%d", success, ep_return, ep_len)
         try:
-            env.reset()
+            env.reset(wait_for_start=False)
         except Exception as exc:
             logger.warning("post-episode reset failed: %s", exc)
 

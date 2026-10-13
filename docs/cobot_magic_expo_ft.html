@@ -255,7 +255,7 @@ class CobotMagicEnv:
 
     def get_info_for_step(self, raw_obs=None):
         time_stop = self._steps &gt;= self.auto_reset_steps
-        manual = success_detector_manual()   <span class="c"># 一行：1 回车=success，2 回车=reset，3 回车=继续</span>
+        manual = success_detector_manual()   <span class="c"># 一行：s 回车=成功，f 回车=失败，q 回车=作废继续</span>
         success = manual == "success"
         terminate = manual == "reset" or time_stop
         done = bool(success or terminate)
@@ -549,20 +549,22 @@ SERVER_HOST=&lt;本机 LAN IP&gt; bash scripts/cobot_screw_sorting/run_policy.sh
   </ul>
 
   <h3>数据怎么进训练</h3>
-  <p>开训时整份 LeRobot 过 Cobot 的 repack、关节 delta、下载来的 norm，插进一个 <code>PiReplayBuffer</code>，标成成功演示。真机每一拍先排队，回合结束才写入：IPC 终端输入 <code>1</code> 并回车为成功，输入 <code>2</code> 并回车或步数到 <code>auto_reset_steps</code> 为失败。不会再写成一份新的 LeRobot。更新在 10 个回合之后、并且样本不少于 batch 时解开；回合结束时按大约每 30 拍一次梯度来补。</p>
+  <p>开训时整份 LeRobot 过 Cobot 的 repack、关节 delta、下载来的 norm，插进一个 <code>PiReplayBuffer</code>，标成成功演示。真机每一拍先排队，回合结束才写入：IPC 终端输入 <code>s</code> 并回车为成功，输入 <code>f</code> 并回车或步数到 <code>auto_reset_steps</code> 为失败。不会再写成一份新的 LeRobot。更新在 10 个回合之后、并且样本不少于 batch 时解开；回合结束时按大约每 30 拍一次梯度来补。</p>
 
   <h3 id="skey">终端标注</h3>
   <p>标注只在运行 <code>run_policy.sh</code> 的 IPC 终端里生效。GPU 上运行 <code>eval_rtc_sft.sh</code> 或 <code>run_server.sh</code> 的终端按键无效。</p>
-  <p><code>CobotMagicEnv.get_info_for_step</code> 每一拍调用 <code>success_detector_manual</code>。该函数对 <code>/dev/tty</code> 做超时为 0 的 <code>select</code>。终端里没有待读的一整行时立刻返回，控制环继续，手臂不停。读入使用 <code>readline</code>，因此必须是数字后接回车构成的一行。只按数字、不按回车时，这一行尚未结束；下一拍发现终端已有字符，就会停在 <code>readline</code> 里等待回车。等待期间控制环停在这一拍，奖励也尚未写入。</p>
+  <p>每次 <code>reset</code> 先把机械臂回零，然后停住，直到同一终端按 <code>o</code> 再回车。这段时间用来摆螺丝、整理场景。按 <code>o</code> 之后策略才发第一帧动作。训练和评测的每个情节都要按一次 <code>o</code>，包括第一情节和超时失败之后。</p>
+  <p>情节进行中，<code>CobotMagicEnv.get_info_for_step</code> 每一拍调用 <code>success_detector_manual</code>。该函数对 <code>/dev/tty</code> 做超时为 0 的 <code>select</code>。终端里没有待读的一整行时立刻返回，控制环继续，手臂不停。读入使用 <code>readline</code>，因此必须是字母后接回车构成的一行。只按字母、不按回车时，这一行尚未结束；下一拍发现终端已有字符，就会停在 <code>readline</code> 里等待回车。等待期间控制环停在这一拍，奖励也尚未写入。</p>
   <p class="cap">表　IPC 终端一行输入的含义</p>
   <table>
-    <tr><th>输入</th><th>该拍的结果</th></tr>
-    <tr><td><code>1</code> 然后回车</td><td>成功。<code>reward=1</code>，回合结束，随后复位。</td></tr>
-    <tr><td><code>2</code> 然后回车</td><td>失败。<code>reward=0</code>，回合结束，随后复位。</td></tr>
-    <tr><td><code>3</code> 然后回车</td><td>丢弃这次输入，回合继续。</td></tr>
-    <tr><td>没有输入</td><td>继续执行，直到步数达到 <code>auto_reset_steps</code>，按失败复位。</td></tr>
+    <tr><th>输入</th><th>何时</th><th>结果</th></tr>
+    <tr><td><code>o</code> 然后回车</td><td>回零之后、情节开始前</td><td>启动情节。其它键不会开始。</td></tr>
+    <tr><td><code>s</code> 然后回车</td><td>情节进行中</td><td>成功。<code>reward=1</code>，情节结束，随后回零，再等下一次 <code>o</code>。</td></tr>
+    <tr><td><code>f</code> 然后回车</td><td>情节进行中</td><td>失败。<code>reward=0</code>，情节结束，随后回零，再等下一次 <code>o</code>。</td></tr>
+    <tr><td><code>q</code> 然后回车</td><td>情节进行中</td><td>这次按键作废，情节继续。</td></tr>
+    <tr><td>没有输入</td><td>情节进行中</td><td>继续执行，直到步数达到 <code>auto_reset_steps</code>，按失败回零，再等 <code>o</code>。</td></tr>
   </table>
-  <p>奖励记在读到这一整行的那一拍，不再推迟到后面的执行窗。中间各拍奖励为 0。相对螺丝已经放好的时刻，滞后主要来自操作者看到结果再输入。回车是这一行的结束符，不把奖励再延后一个备份窗口。<code>eval_rtc_sft.sh</code> 不用该奖励更新网络，只决定日志里这一回合是否成功。在线强化学习里，正奖励同样落在读到 <code>1</code> 的那一拍。</p>
+  <p>奖励记在读到 <code>s</code> 或 <code>f</code> 这一整行的那一拍。中间各拍奖励为 0。相对螺丝已经放好的时刻，滞后主要来自操作者看到结果再输入。回车是这一行的结束符。<code>eval_rtc_sft.sh</code> 不用该奖励更新网络，只决定日志里这一回合是否成功。</p>
   <p>采用按行读取，是为了让 30 Hz 控制环在操作者提交之前不查询键盘，也避免把误触的单个字符当成回合结束。</p>
   <p>约 13 s 的上限来自 <code>configs/task/cobot_screw_sorting.py</code> 的 <code>auto_reset_steps = 400</code>，除以 <code>control_hz = 30</code>。GPU 评测循环与 IPC 环境读的是同一字段。修改后两边进程都要重启。约 30 s 对应 900 步。</p>
   <p>复位走 OpenPI <code>real_env.reset()</code> 里写死的近零位，夹爪 0.09。单臂时左臂停在左臂复位角，右臂跟踪策略。公式与复位角见下一节。</p>

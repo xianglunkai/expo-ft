@@ -18,6 +18,8 @@ import openpi.transforms as _transforms
 
 
 ALL_CAMERA_KEYS = ("base_0_rgb", "left_wrist_0_rgb", "right_wrist_0_rgb")
+# pi0.5 always has these three slots. A robot that lacks one still needs the key
+# at sample time, filled with a black image and image_mask=False.
 
 # Row gathers dominate next_batch (~2 GB/s single-threaded for the image tensors).
 # numpy drops the GIL inside np.take, so splitting the rows across threads gets
@@ -81,8 +83,12 @@ def _insert_recursively(
 
 
 def create_replay_buffer(config, example_action, capacity, task_description, replan_steps, seed, delay=0,
-                         critic_camera_keys=CRITIC_CAMERA_KEYS):
-    """Build pi05 config and create a seeded PiReplayBuffer."""
+                         critic_camera_keys=CRITIC_CAMERA_KEYS, camera_keys=None):
+    """Build pi05 config and create a seeded PiReplayBuffer.
+
+    ``camera_keys`` are the views stored in the buffer. None keeps all three pi0.5
+    slots. Missing slots are synthesized as black images with mask False on sample.
+    """
     from expo_ft.utils.train_utils import build_pi05_config
     _, pi05_train_config, pi05_resize_size, _ = build_pi05_config(config)
     buf = PiReplayBuffer(
@@ -96,6 +102,7 @@ def create_replay_buffer(config, example_action, capacity, task_description, rep
         discount=config.discount,
         delay=delay,
         critic_camera_keys=critic_camera_keys,
+        camera_keys=camera_keys,
         valids_keep_terminal_windows=config.get("valids_keep_terminal_windows", False),
     )
     buf.seed(seed)
@@ -146,26 +153,32 @@ class PiReplayBuffer(Dataset):
         discount: float = 0.99,
         delay: int = 0,
         critic_camera_keys: Tuple[str, ...] = CRITIC_CAMERA_KEYS,
+        camera_keys: Optional[Tuple[str, ...]] = None,
         valids_keep_terminal_windows: bool = False,
     ):
         data_config = pi_train_config.data.create(pi_train_config.assets_dirs, pi_train_config.model)
         model_config = pi_train_config.model
         padded_action_dim = model_config.action_dim
         action_horizon = model_config.action_horizon
-        image_shape = wrist_image_shape = (resize_size, resize_size, 3)
+        image_shape = (resize_size, resize_size, 3)
         state_shape = (padded_action_dim,)
         action_chunk_shape = (action_horizon, padded_action_dim)
         max_token_len = model_config.max_token_len
         raw_action_dim = example_action.shape[-1]
 
 
-        dataset_dict = dict(
-            base_image=np.empty((capacity, *image_shape), dtype=np.uint8),
-            left_wrist_image=np.empty((capacity, *wrist_image_shape), dtype=np.uint8),
-            right_wrist_image=np.empty((capacity, *wrist_image_shape), dtype=np.uint8),
-            base_image_mask=np.empty((capacity,), dtype=bool),
-            left_wrist_image_mask=np.empty((capacity,), dtype=bool),
-            right_wrist_image_mask=np.empty((capacity,), dtype=bool),
+        stored_cameras = tuple(camera_keys) if camera_keys is not None else ALL_CAMERA_KEYS
+        unknown = [k for k in stored_cameras if k not in ALL_CAMERA_KEYS]
+        if unknown:
+            raise ValueError(f"Unknown camera keys {unknown}; expected a subset of {ALL_CAMERA_KEYS}.")
+        if not stored_cameras:
+            raise ValueError("camera_keys must list at least one camera.")
+        dataset_dict = {}
+        for cam in stored_cameras:
+            storage = _critic_key_to_storage(cam)
+            dataset_dict[storage] = np.empty((capacity, *image_shape), dtype=np.uint8)
+            dataset_dict[storage + "_mask"] = np.empty((capacity,), dtype=bool)
+        dataset_dict.update(
             state=np.empty((capacity, *state_shape), dtype=np.float32),
             actions=np.empty((capacity, *action_chunk_shape), dtype=np.float32),
             tokenized_prompt=np.empty((capacity, max_token_len), dtype=int),
@@ -195,8 +208,13 @@ class PiReplayBuffer(Dataset):
 
         self._action_dim = padded_action_dim
         self._critic_camera_keys = tuple(critic_camera_keys)
-        # Cameras each sample_jax gathers (all of them; the VLA learners feed them to pi0.5).
-        self._gather_camera_keys = tuple(ALL_CAMERA_KEYS)
+        missing_critic = [k for k in self._critic_camera_keys if k not in stored_cameras]
+        if missing_critic:
+            raise ValueError(
+                f"critic cameras {missing_critic} are not in stored camera_keys {stored_cameras}."
+            )
+        # Only these views occupy image memory. sample() fills the other pi0.5 slots.
+        self._gather_camera_keys = stored_cameras
         self._gather_storage = tuple(_critic_key_to_storage(k) for k in self._gather_camera_keys)
         self._replan_steps = replan_steps
         # Simulated inference latency (env-steps) for real-time chunking learners. The
@@ -280,16 +298,14 @@ class PiReplayBuffer(Dataset):
 
         result = {
             "state": transformed["state"],
-            "base_image": transformed["image"]["base_0_rgb"],
-            "left_wrist_image": transformed["image"]["left_wrist_0_rgb"],
-            "right_wrist_image": transformed["image"]["right_wrist_0_rgb"],
-            "base_image_mask": transformed["image_mask"]["base_0_rgb"],
-            "left_wrist_image_mask": transformed["image_mask"]["left_wrist_0_rgb"],
-            "right_wrist_image_mask": transformed["image_mask"]["right_wrist_0_rgb"],
             "tokenized_prompt": transformed["tokenized_prompt"],
             "tokenized_prompt_mask": transformed["tokenized_prompt_mask"],
             "actions": transformed["actions"],
         }
+        for cam in self._gather_camera_keys:
+            storage = _critic_key_to_storage(cam)
+            result[storage] = transformed["image"][cam]
+            result[storage + "_mask"] = transformed["image_mask"][cam]
         for k in ["rewards", "masks", "dones"]:
             result[k] = data_dict[k]
         result["is_hil"] = np.asarray(data_dict.get("is_hil", False), dtype=bool)
@@ -573,6 +589,14 @@ class PiReplayBuffer(Dataset):
                     img = img.astype(np.float32) / 255.0 * 2.0 - 1.0
                 openpi_batch[img_key][cam] = img
                 openpi_batch[f"{img_key}_mask"][cam] = openpi_batch.pop(f"{prefix}{st}_mask")
+            # pi0.5 still indexes every IMAGE_KEY. A camera this robot does not have
+            # was never stored; hand the model a black frame and a false mask.
+            ref = next(iter(openpi_batch[img_key].values()))
+            for cam in ALL_CAMERA_KEYS:
+                if cam in openpi_batch[img_key]:
+                    continue
+                openpi_batch[img_key][cam] = np.full(ref.shape, -1.0, dtype=ref.dtype)
+                openpi_batch[f"{img_key}_mask"][cam] = np.zeros(ref.shape[0], dtype=bool)
         return openpi_batch
 
     def get_iterator(

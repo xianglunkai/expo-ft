@@ -25,5 +25,7 @@ def get_config():
     c.auto_reset_steps = 800  # ~26s @ 30Hz
     c.edit_action_xyzg = False
     c.use_single_arm = True
+    # Real cameras. pi0.5 still has a left-wrist slot; the buffer does not store it.
+    c.camera_keys = ("base_0_rgb", "right_wrist_0_rgb")
     c.critic_camera_keys = ("base_0_rgb", "right_wrist_0_rgb")
     return c

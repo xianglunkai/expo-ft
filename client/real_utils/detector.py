@@ -201,63 +201,80 @@ class LightPlugDetector:
         return success, False
 
 
+def _tty_readline() -> str:
+    """Read one line from the controlling terminal. Empty string on failure."""
+    try:
+        with open("/dev/tty", "r") as tty:
+            return tty.readline()
+    except Exception:
+        try:
+            return sys.stdin.readline()
+        except Exception:
+            return ""
+
+
+def _tty_pending() -> bool:
+    """True when a full line is already waiting on the controlling terminal."""
+    try:
+        with open("/dev/tty", "r") as tty:
+            fd = tty.fileno()
+            rlist, _, _ = select.select([fd], [], [], 0.0)
+            return bool(rlist)
+    except Exception:
+        return False
+
+
 def success_detector_manual():
-    """Non-blocking manual episode override via stdin (when input is pending).
+    """Non-blocking episode label. A letter plus Enter is one line.
 
-    Returns one of:
-    - "keep_going": no input queued, or user chose 3
-    - "success": user entered 1
-    - "reset": user entered 2 or 0 (end episode and home)
+    Returns:
+    - "success": s (or legacy 1). Reward 1, episode ends, then home.
+    - "reset": f (or legacy 2/0). Reward 0, episode ends, then home.
+    - "keep_going": nothing queued, q (or legacy 3), or any other key including o.
+      o only starts an episode; see wait_for_episode_start.
 
-    Uses /dev/tty when available so it works even if stdin is redirected.
+    Does not block the control loop unless a line is already pending and incomplete
+    (a letter typed without Enter).
     """
-
-    def _readline(prompt: str) -> str:
-        try:
-            sys.stdout.write(prompt + "\n")
-            sys.stdout.flush()
-        except Exception:
-            pass
-        # Prefer controlling terminal if available
-        try:
-            with open("/dev/tty", "r") as tty:
-                return tty.readline()
-        except Exception:
-            # Fallback to stdin
-            try:
-                return sys.stdin.readline()
-            except Exception:
-                return False
-
-    # Non-blocking first stage: only proceed to blocking prompt if a line is pending
-    def _pending_line() -> bool:
-        # Check controlling terminal only; avoid stdin which might always appear ready
-        try:
-            with open("/dev/tty", "r") as tty:
-                fd = tty.fileno()
-                rlist, _, _ = select.select([fd], [], [], 0.0)
-                return bool(rlist)
-        except Exception:
-            return False
-
-    if not _pending_line():
-        # No user input queued; do not block
+    if not _tty_pending():
         return "keep_going"
 
+    choice = _tty_readline()
+    if not choice:
+        return "keep_going"
+    key = choice.strip().lower()
+    if key in ("s", "1"):
+        print("[manual] 成功。情节结束，随后回零。")
+        return "success"
+    if key in ("f", "2", "0"):
+        print("[manual] 失败。情节结束，随后回零。")
+        return "reset"
+    if key in ("q", "3"):
+        print("[manual] 作废，情节继续。")
+        return "keep_going"
+    if key == "o":
+        print("[manual] o 只用于启动情节，当前情节继续。")
+        return "keep_going"
+    print("[manual] 无效。情节中请按 s / f / q 再回车。")
+    return "keep_going"
+
+
+def wait_for_episode_start():
+    """Block until the operator presses o and Enter.
+
+    Called after the arm is already at the home pose, so the scene can be
+    reset before the policy sends the first command.
+    """
+    print("[manual] 机械臂已回零。请重置场景，然后按 o 再回车开始情节。")
+    print("[manual] 情节中：s+回车=成功，f+回车=失败，q+回车=作废并继续。")
     while True:
-        choice = _readline(
-            "[manual] 1=success  2/0=abort→home  3=keep going  then ENTER:"
-        )
+        choice = _tty_readline()
         if not choice:
-            return "keep_going"
-        choice = choice.strip()
-        if choice == "1":
-            print("[manual] Success annotated.")
-            return "success"
-        if choice in ("2", "0"):
-            print("[manual] Abort → home (reset).")
-            return "reset"
-        if choice == "3":
-            print("[manual] Keep going.")
-            return "keep_going"
-        print("[manual] Invalid. Type 1, 2/0, or 3, then ENTER.")
+            continue
+        key = choice.strip().lower()
+        if key == "o":
+            print("[manual] 情节开始。")
+            return
+        if key == "":
+            continue
+        print(f"[manual] 收到 {key!r}，情节尚未开始。按 o 再回车。")

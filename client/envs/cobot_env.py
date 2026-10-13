@@ -1,7 +1,7 @@
 """Cobot Magic single-arm env. Same RPC surface as DroidEnv for run_client.py."""
 import numpy as np
 from openpi_client import image_tools
-from client.real_utils.detector import success_detector_manual
+from client.real_utils.detector import success_detector_manual, wait_for_episode_start
 from examples.mobile_aloha_AgileX.real_env import make_real_env
 
 
@@ -29,9 +29,11 @@ class CobotMagicEnv:
         self._steps = 0
         self.prev_obs = None
 
-    def reset(self):
+    def reset(self, wait_for_start=True):
         self._steps = 0
         self._env.reset()
+        if wait_for_start:
+            wait_for_episode_start()
         return self.get_observation()
 
     def _pack(self, raw):
@@ -67,7 +69,7 @@ class CobotMagicEnv:
 
     def get_info_for_step(self, raw_obs=None):
         time_stop = self._steps >= self.auto_reset_steps
-        manual = success_detector_manual()  # terminal: 1=success, 2=reset
+        manual = success_detector_manual()  # s=success, f=failure, q=discard
         success = manual == "success"
         terminate = manual == "reset" or time_stop
         done = bool(success or terminate)

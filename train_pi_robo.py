@@ -19,7 +19,7 @@ import etils.epath as epath
 import wandb
 from expo_ft.agents import initialize_checkpoint_dir
 from expo_ft.agents.alg.batch_utils import CRITIC_CAMERA_KEYS
-from expo_ft.data.replay_buffer import create_replay_buffer, _critic_key_to_storage
+from expo_ft.data.replay_buffer import ALL_CAMERA_KEYS, create_replay_buffer, _critic_key_to_storage
 from expo_ft.data.batch_processor import BatchProcessor
 from expo_ft.env.env_client import EnvClientWrapper
 from expo_ft.env.task_dataset import load_task_dataset
@@ -156,18 +156,45 @@ def main(_):
     )
 
     critic_camera_keys = tuple(getattr(FLAGS.config_task, "critic_camera_keys", CRITIC_CAMERA_KEYS))
+    camera_keys = tuple(getattr(FLAGS.config_task, "camera_keys", ALL_CAMERA_KEYS))
+    # Image tensors are allocated up front. Size them to the frames this run can
+    # actually store: seeded demos, transitions restored on resume, and one
+    # auto_reset_steps-long episode per --max_episodes. --max_steps stays the
+    # training-loop cap and is the online budget only when max_episodes is 0.
+    reset_steps = int(getattr(FLAGS.config_task, "auto_reset_steps", 800) or 800)
+    if FLAGS.max_episodes > 0:
+        online_room = FLAGS.max_episodes * reset_steps
+    else:
+        online_room = FLAGS.max_steps
+    resume_transitions = 0
+    if resuming:
+        buffer_dir = epath.Path(checkpoint_dir) / "buffers"
+        if buffer_dir.exists():
+            resume_transitions = sum(1 for p in buffer_dir.glob("*.pkl") if p.stem.isdigit())
+    capacity = len(dataset) + resume_transitions + online_room
+    # offline_ratio=0 keeps demos in the online buffer. The second buffer is only
+    # read for an init example when it actually received data.
+    offline_capacity = capacity if FLAGS.offline_ratio > 0 else 1
+    image_gib = capacity * len(camera_keys) * 224 * 224 * 3 / (1024 ** 3)
+    logging.info(
+        "Replay capacity=%d (demos=%d, resume=%d, online_room=%d). "
+        "About %.1f GiB for cameras %s. Offline buffer capacity=%d.",
+        capacity, len(dataset), resume_transitions, online_room,
+        image_gib, ",".join(camera_keys), offline_capacity,
+    )
     rb_args = dict(
         config=FLAGS.config,
         example_action=example_action,
-        capacity=FLAGS.max_steps,
+        capacity=capacity,
         task_description=task_description,
         replan_steps=FLAGS.replan_steps,
         seed=FLAGS.seed,
         delay=FLAGS.delay,
         critic_camera_keys=critic_camera_keys,
+        camera_keys=camera_keys,
     )
     replay_buffer = create_replay_buffer(**rb_args)
-    offline_replay_buffer = create_replay_buffer(**rb_args)
+    offline_replay_buffer = create_replay_buffer(**dict(rb_args, capacity=offline_capacity))
 
     actor_success_only = getattr(FLAGS.config, "actor_success_only", False)
     batch_processor = BatchProcessor(
@@ -181,14 +208,17 @@ def main(_):
         use_dagger_hil_sampling=use_dagger_hil_sampling,
         dataset=dataset,
     )
+    # Frames now live in the replay buffer. Drop the python list so it is not a second copy.
+    del dataset
 
+    example_buffer = offline_replay_buffer if offline_replay_buffer._size > 0 else replay_buffer
     critic_example = {
-        _critic_key_to_storage(k): offline_replay_buffer.dataset_dict[_critic_key_to_storage(k)][0][np.newaxis]
+        _critic_key_to_storage(k): example_buffer.dataset_dict[_critic_key_to_storage(k)][0][np.newaxis]
         for k in critic_camera_keys
     }
-    critic_example["state"] = offline_replay_buffer.dataset_dict['state'][0][np.newaxis]
-    critic_example["actions"] = offline_replay_buffer.dataset_dict['actions'][0][np.newaxis]
-    agent_example_observation, agent_example_state, agent_example_action = offline_replay_buffer.convert_to_critic_format(
+    critic_example["state"] = example_buffer.dataset_dict['state'][0][np.newaxis]
+    critic_example["actions"] = example_buffer.dataset_dict['actions'][0][np.newaxis]
+    agent_example_observation, agent_example_state, agent_example_action = example_buffer.convert_to_critic_format(
         critic_example)
     actor.action_dim = agent_example_action.squeeze().shape[-1]
     actor.state_dim = agent_example_state.squeeze().shape[-1]
@@ -334,6 +364,7 @@ def main(_):
         sampler.observe(observation)
         with timer.context("info"):
             done, success, reward, mask = env.get_info_for_step()
+        sink.label_last(reward, mask, done)  # outcome of the previous action
 
         # Start the next chunk's inference once exactly `delay` actions remain in the plan.
         sampler.launch(agent, observation, len(action_plan), action_type)
@@ -379,13 +410,10 @@ def main(_):
             action_plan.clear()
             sampler.on_human_takeover()
 
-        if has_action or action_type == "human":
+        if (has_action or action_type == "human") and not done:
             transition = dict(
                 observations=observation,
                 actions=real_action,
-                rewards=reward,
-                masks=mask,
-                dones=done,
                 is_hil=(action_type == "human"),
             )
             # Queued only; the buffer insert happens before the next update or at episode end.
@@ -403,7 +431,12 @@ def main(_):
         first_step_of_episode = done  # next iteration starts a new episode if this one ended
         if done:
             # Reset starts now; the updates below run while the robot homes.
-            pending_reset = reset_executor.submit(env.reset)
+            # The last episode of a capped run homes and returns; it does not wait for o.
+            start_next = not (
+                FLAGS.max_episodes > 0
+                and online_episodes_this_run + 1 >= FLAGS.max_episodes
+            )
+            pending_reset = reset_executor.submit(env.reset, wait_for_start=start_next)
             sink.flush_transitions()
             with buffer_lock:
                 batch_processor.on_episode_done(success)
